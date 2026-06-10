@@ -1,0 +1,636 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPERADMIN
+  ADMIN
+  SUPERVISOR
+  TECNICO
+  CLIENTE_VIEWER
+}
+
+enum PlantStatus {
+  ACTIVE
+  STANDBY
+  INACTIVE
+}
+
+enum AssetNodeType {
+  TECHNICAL_LOCATION
+  EQUIPMENT
+}
+
+enum FrequencyCode {
+  ONE_MONTH
+  SIX_MONTHS
+  ONE_YEAR
+  FIVE_YEARS
+  CUSTOM
+}
+
+enum OccurrenceStatus {
+  SCHEDULED
+  DUE_SOON
+  OVERDUE
+  CONVERTED_TO_WORK_ORDER
+  COMPLETED
+  SKIPPED
+  CANCELLED
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  SCHEDULED
+  ASSIGNED
+  IN_PROGRESS
+  PENDING_EVIDENCE
+  PENDING_SUPERVISOR_REVIEW
+  PENDING_CLIENT_APPROVAL
+  COMPLETED
+  CLOSED
+  SIGNED
+  REJECTED
+  REOPENED
+  POSTPONED
+  SKIPPED
+  CANCELLED
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  BLOCKED
+  SKIPPED
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  RELEASED
+  CANCELLED
+}
+
+enum ImportFileType {
+  KKS_FIORI
+  POSICIONES_ESSC_SUR
+  PLANES_MANTENCION
+}
+
+enum ImportJobStatus {
+  UPLOADED
+  MAPPED
+  DRY_RUN_READY
+  BLOCKED
+  APPLYING
+  APPLIED
+  FAILED
+}
+
+enum IssueSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum NotificationSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+model User {
+  id                     String                  @id @default(cuid())
+  email                  String                  @unique
+  name                   String?
+  passwordHash           String
+  role                   Role                    @default(TECNICO)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  sessions               Session[]
+  plantScopes            UserPlantScope[]
+  auditEvents            AuditEvent[]
+  importJobs             ImportJob[]
+  createdWorkOrders      WorkOrder[]             @relation("WorkOrderCreatedBy")
+  assignedWorkOrders     WorkOrder[]             @relation("WorkOrderAssignedUser")
+  assignments            Assignment[]
+  hhEntries              HhEntry[]
+  evidenceFiles          EvidenceFile[]
+  clientApprovals        ClientApproval[]        @relation("ApprovalRespondedBy")
+  notificationPreference NotificationPreference?
+  pushSubscriptions      PushSubscription[]
+
+  @@index([role])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash  String   @unique
+  userAgent    String?
+  ip           String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Client {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  taxId     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  plants    Plant[]
+}
+
+model Plant {
+  id                String                  @id @default(cuid())
+  code              String                  @unique
+  name              String
+  clientId          String
+  client            Client                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  status            PlantStatus             @default(ACTIVE)
+  latitude          Float?
+  longitude         Float?
+  healthScore       Int?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  aliases           PlantAlias[]
+  userScopes        UserPlantScope[]
+  assetNodes        AssetKksNode[]
+  templates         MaintenanceTemplate[]
+  occurrences       MaintenanceOccurrence[]
+  workOrders        WorkOrder[]
+  kpiSummaries      KpiDailySummary[]
+  recertifications  PlantRecertification[]
+  importMappings    ImportMapping[]
+  notificationEvents NotificationEvent[]
+
+  @@index([clientId])
+  @@index([status, healthScore])
+}
+
+model PlantAlias {
+  id        String   @id @default(cuid())
+  plantId   String
+  plant     Plant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  aliasCode String
+  source    String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([aliasCode, source])
+  @@index([plantId])
+}
+
+model UserPlantScope {
+  id        String   @id @default(cuid())
+  userId    String
+  plantId   String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plant     Plant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, plantId])
+  @@index([plantId])
+}
+
+model WorkCenter {
+  id          String         @id @default(cuid())
+  code        String         @unique
+  name        String
+  assetNodes  AssetKksNode[]
+  personnel   Personnel[]
+}
+
+model CostCenter {
+  id         String         @id @default(cuid())
+  code       String         @unique
+  name       String
+  assetNodes AssetKksNode[]
+}
+
+model Specialty {
+  id        String      @id @default(cuid())
+  code      String      @unique
+  name      String
+  personnel Personnel[]
+  templates MaintenanceTemplate[]
+}
+
+model Personnel {
+  id                 String       @id @default(cuid())
+  name               String
+  email              String?
+  phone              String?
+  isExternal         Boolean      @default(false)
+  weeklyCapacityHours Float       @default(45)
+  primarySpecialtyId String?
+  primarySpecialty   Specialty?   @relation(fields: [primarySpecialtyId], references: [id], onDelete: SetNull)
+  workCenterId       String?
+  workCenter         WorkCenter?  @relation(fields: [workCenterId], references: [id], onDelete: SetNull)
+  assignments        Assignment[]
+
+  @@index([primarySpecialtyId])
+  @@index([workCenterId])
+}
+
+model AssetKksNode {
+  id                   String                 @id @default(cuid())
+  plantId              String?
+  plant                Plant?                 @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  parentId             String?
+  parent               AssetKksNode?          @relation("KksTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children             AssetKksNode[]         @relation("KksTree")
+  nodeType             AssetNodeType
+  technicalObject      String                 @unique
+  superiorObject       String?
+  kks                  String?
+  kksDescription       String?
+  equipmentCode        String?
+  equipmentDescription String?
+  planningGroup        String?
+  site                 String?
+  systemStatus         String?
+  center               String?
+  workCenterId         String?
+  workCenter           WorkCenter?            @relation(fields: [workCenterId], references: [id], onDelete: SetNull)
+  costCenterId         String?
+  costCenter           CostCenter?            @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  raw                  Json
+  sourceHash           String
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  templates            MaintenanceTemplate[]
+  occurrences          MaintenanceOccurrence[]
+  workOrders           WorkOrder[]
+
+  @@index([plantId, nodeType])
+  @@index([parentId])
+  @@index([kks])
+  @@index([equipmentCode])
+  @@index([center])
+}
+
+model MaintenanceFrequency {
+  id             String                 @id @default(cuid())
+  code           FrequencyCode          @unique
+  label          String
+  monthsInterval Int?
+  templates      MaintenanceTemplate[]
+}
+
+model MaintenanceTemplate {
+  id                 String                  @id @default(cuid())
+  plantId            String
+  plant              Plant                   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  assetNodeId        String?
+  assetNode          AssetKksNode?           @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
+  frequencyId        String
+  frequency          MaintenanceFrequency    @relation(fields: [frequencyId], references: [id], onDelete: Restrict)
+  requiredSpecialtyId String?
+  requiredSpecialty  Specialty?              @relation(fields: [requiredSpecialtyId], references: [id], onDelete: SetNull)
+  sourcePosition     String?
+  planName           String
+  routeSheet         String?
+  activityName       String
+  wbsElement         String?
+  startMonth         Int?
+  requiresEvidence   Boolean                 @default(true)
+  sourceHash         String                  @unique
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  occurrences        MaintenanceOccurrence[]
+
+  @@index([plantId])
+  @@index([assetNodeId])
+  @@index([frequencyId])
+}
+
+model MaintenanceOccurrence {
+  id             String             @id @default(cuid())
+  templateId     String
+  template       MaintenanceTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  plantId        String
+  plant          Plant              @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  assetNodeId    String?
+  assetNode      AssetKksNode?      @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
+  scheduledFor   DateTime
+  status         OccurrenceStatus   @default(SCHEDULED)
+  sourceMonthKey String
+  sourceHash     String             @unique
+  workOrder      WorkOrder?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([plantId, scheduledFor])
+  @@index([status, scheduledFor])
+  @@index([assetNodeId])
+}
+
+model WorkOrder {
+  id               String                 @id @default(cuid())
+  code             String                 @unique
+  plantId          String
+  plant            Plant                  @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  assetNodeId      String?
+  assetNode        AssetKksNode?          @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
+  occurrenceId     String?                @unique
+  occurrence       MaintenanceOccurrence? @relation(fields: [occurrenceId], references: [id], onDelete: SetNull)
+  title            String
+  description      String?
+  status           WorkOrderStatus        @default(DRAFT)
+  criticality      IssueSeverity          @default(INFO)
+  plannedStart     DateTime?
+  plannedEnd       DateTime?
+  plannedHours     Float?
+  importedProgress Float?
+  progress         Float                  @default(0)
+  createdById      String?
+  createdBy        User?                  @relation("WorkOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedUserId   String?
+  assignedUser     User?                  @relation("WorkOrderAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  milestones       WorkOrderMilestone[]
+  assignments      Assignment[]
+  hhEntries        HhEntry[]
+  evidenceFiles    EvidenceFile[]
+  clientApprovals  ClientApproval[]
+
+  @@index([plantId, status])
+  @@index([status, plannedStart])
+  @@index([assetNodeId])
+  @@index([assignedUserId])
+}
+
+model WorkOrderMilestone {
+  id          String          @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder       @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  label       String
+  weight      Float
+  status      MilestoneStatus @default(PENDING)
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+
+  @@index([workOrderId, status])
+}
+
+model Assignment {
+  id          String           @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  personnelId String?
+  personnel   Personnel?       @relation(fields: [personnelId], references: [id], onDelete: SetNull)
+  userId      String?
+  user        User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  status      AssignmentStatus @default(ACTIVE)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  notes       String?
+  createdAt   DateTime         @default(now())
+
+  @@index([workOrderId])
+  @@index([personnelId, startsAt])
+  @@index([userId])
+}
+
+model HhEntry {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  hours       Float
+  entryDate   DateTime
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId, entryDate])
+  @@index([userId, entryDate])
+}
+
+model EvidenceFile {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  uploadedById String?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  storageKey  String    @unique
+  fileName    String
+  mimeType    String
+  sizeBytes   Int
+  checksum    String
+  isRequired  Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId])
+  @@index([uploadedById])
+}
+
+model ClientApproval {
+  id             String    @id @default(cuid())
+  workOrderId    String
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  requestedAt    DateTime  @default(now())
+  respondedAt    DateTime?
+  respondedById  String?
+  respondedBy    User?     @relation("ApprovalRespondedBy", fields: [respondedById], references: [id], onDelete: SetNull)
+  approved       Boolean?
+  comments       String?
+
+  @@index([workOrderId, respondedAt])
+}
+
+model PlantRecertification {
+  id             String   @id @default(cuid())
+  plantId        String
+  plant          Plant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  label          String
+  dueDate        DateTime
+  completedAt    DateTime?
+  isIrregular    Boolean  @default(false)
+  source         String
+
+  @@index([plantId, dueDate])
+}
+
+model ImportJob {
+  id          String          @id @default(cuid())
+  fileType    ImportFileType
+  status      ImportJobStatus @default(UPLOADED)
+  uploadedById String?
+  uploadedBy   User?         @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  originalName String
+  storageKey   String?
+  dryRun       Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  files        ImportFile[]
+  rows         ImportRow[]
+  issues       ImportIssue[]
+  mappings     ImportMapping[]
+
+  @@index([fileType, status])
+}
+
+model ImportFile {
+  id          String    @id @default(cuid())
+  importJobId String
+  importJob   ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  sheetName    String?
+  fileName     String
+  checksum     String
+  createdAt    DateTime @default(now())
+
+  @@index([importJobId])
+}
+
+model ImportRow {
+  id          String    @id @default(cuid())
+  importJobId String
+  importJob   ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  sheetName    String
+  rowNumber    Int
+  rowHash      String
+  raw          Json
+  createdEntity String?
+  createdAt    DateTime @default(now())
+
+  @@unique([importJobId, sheetName, rowNumber])
+  @@index([rowHash])
+}
+
+model ImportIssue {
+  id          String        @id @default(cuid())
+  importJobId String
+  importJob   ImportJob     @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  severity    IssueSeverity
+  code        String
+  message     String
+  rowNumber   Int?
+  resolvedAt  DateTime?
+  resolution  Json?
+  createdAt   DateTime      @default(now())
+
+  @@index([importJobId, severity])
+}
+
+model ImportMapping {
+  id          String     @id @default(cuid())
+  importJobId String?
+  importJob   ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
+  sourceType  String
+  sourceValue String
+  targetPlantId String?
+  targetPlant   Plant?    @relation(fields: [targetPlantId], references: [id], onDelete: SetNull)
+  notes       String?
+  createdAt   DateTime   @default(now())
+
+  @@unique([sourceType, sourceValue])
+  @@index([targetPlantId])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actorUser   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  resource    String
+  resourceId  String
+  action      String
+  before      Json?
+  after       Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([resource, resourceId])
+  @@index([actorUserId, createdAt])
+}
+
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  scope       String
+  response    Json?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+}
+
+model KpiDailySummary {
+  id                     String   @id @default(cuid())
+  plantId                String?
+  plant                  Plant?   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  day                    DateTime
+  overdueWorkOrders      Int      @default(0)
+  upcomingOccurrences30d Int      @default(0)
+  plannedHours           Float    @default(0)
+  actualHours            Float    @default(0)
+  healthScore            Int?
+  createdAt              DateTime @default(now())
+
+  @@unique([plantId, day])
+  @@index([day])
+}
+
+model ReportRun {
+  id        String   @id @default(cuid())
+  type      String
+  filters   Json
+  status    String
+  outputKey String?
+  createdAt DateTime @default(now())
+}
+
+model NotificationEvent {
+  id          String               @id @default(cuid())
+  plantId     String?
+  plant       Plant?               @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  severity    NotificationSeverity
+  type        String
+  title       String
+  body        String
+  payload     Json
+  dispatchedAt DateTime?
+  createdAt   DateTime            @default(now())
+
+  @@index([plantId, severity])
+  @@index([dispatchedAt])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  @@index([userId, revokedAt])
+}
+
+model NotificationPreference {
+  id              String               @id @default(cuid())
+  userId          String               @unique
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pushEnabled     Boolean              @default(false)
+  minimumSeverity NotificationSeverity @default(WARNING)
+  quietHoursStart String?
+  quietHoursEnd   String?
+  updatedAt       DateTime             @updatedAt
+}
