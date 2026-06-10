@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { AuditModule } from './audit/audit.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -15,6 +16,12 @@ import { WorkOrdersModule } from './work-orders/work-orders.module';
 
 @Module({
   imports: [
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 120,
+      },
+    ]),
     PrismaModule,
     HealthModule,
     DashboardModule,

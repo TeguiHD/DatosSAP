@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [uuidOssp(map: "uuid-ossp"), pgcrypto, postgis]
 }
 
 enum Role {
@@ -104,15 +106,29 @@ enum NotificationSeverity {
   CRITICAL
 }
 
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+  clients   Client[]
+
+  @@index([slug])
+}
+
 model User {
   id                     String                  @id @default(cuid())
+  organizationId         String?
+  organization           Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   email                  String                  @unique
   name                   String?
   passwordHash           String
   role                   Role                    @default(TECNICO)
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
-  sessions               Session[]
+  sessions               UserSession[]
   plantScopes            UserPlantScope[]
   auditEvents            AuditEvent[]
   importJobs             ImportJob[]
@@ -122,13 +138,18 @@ model User {
   hhEntries              HhEntry[]
   evidenceFiles          EvidenceFile[]
   clientApprovals        ClientApproval[]        @relation("ApprovalRespondedBy")
+  workOrderComments      WorkOrderComment[]
+  workOrderStatusHistory WorkOrderStatusHistory[]
+  signedReports          SignedReport[]
+  recertificationDocuments RecertificationDocument[]
   notificationPreference NotificationPreference?
   pushSubscriptions      PushSubscription[]
 
+  @@index([organizationId])
   @@index([role])
 }
 
-model Session {
+model UserSession {
   id           String   @id @default(cuid())
   userId       String
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -141,15 +162,20 @@ model Session {
 
   @@index([userId])
   @@index([expiresAt])
+  @@map("user_sessions")
 }
 
 model Client {
   id        String   @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   name      String   @unique
   taxId     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   plants    Plant[]
+
+  @@index([organizationId])
 }
 
 model Plant {
@@ -174,6 +200,8 @@ model Plant {
   recertifications  PlantRecertification[]
   importMappings    ImportMapping[]
   notificationEvents NotificationEvent[]
+  recertificationCycles RecertificationCycle[]
+  kpiMeasures       KpiDailyMeasure[]
 
   @@index([clientId])
   @@index([status, healthScore])
@@ -225,6 +253,7 @@ model Specialty {
   name      String
   personnel Personnel[]
   templates MaintenanceTemplate[]
+  milestoneConfigs MilestoneConfig[]
 }
 
 model Personnel {
@@ -366,6 +395,9 @@ model WorkOrder {
   hhEntries        HhEntry[]
   evidenceFiles    EvidenceFile[]
   clientApprovals  ClientApproval[]
+  statusHistory    WorkOrderStatusHistory[]
+  comments         WorkOrderComment[]
+  signedReports    SignedReport[]
 
   @@index([plantId, status])
   @@index([status, plannedStart])
@@ -377,6 +409,8 @@ model WorkOrderMilestone {
   id          String          @id @default(cuid())
   workOrderId String
   workOrder   WorkOrder       @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  configId    String?
+  config      MilestoneConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
   label       String
   weight      Float
   status      MilestoneStatus @default(PENDING)
@@ -384,6 +418,56 @@ model WorkOrderMilestone {
   createdAt   DateTime        @default(now())
 
   @@index([workOrderId, status])
+  @@index([configId])
+}
+
+model MilestoneConfig {
+  id                  String               @id @default(cuid())
+  code                String               @unique
+  label               String
+  weight              Float
+  order               Int                  @default(0)
+  requiredEvidence    Boolean              @default(false)
+  requiredSpecialtyId String?
+  requiredSpecialty   Specialty?           @relation(fields: [requiredSpecialtyId], references: [id], onDelete: SetNull)
+  active              Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  milestones          WorkOrderMilestone[]
+
+  @@index([active, order])
+  @@index([requiredSpecialtyId])
+}
+
+model WorkOrderStatusHistory {
+  id          String           @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  fromStatus  WorkOrderStatus?
+  toStatus    WorkOrderStatus
+  changedById String?
+  changedBy   User?            @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  @@index([workOrderId, createdAt])
+  @@index([changedById, createdAt])
+  @@index([toStatus, createdAt])
+}
+
+model WorkOrderComment {
+  id           String    @id @default(cuid())
+  workOrderId  String
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  authorUserId String?
+  authorUser   User?     @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  body         String
+  internal     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+
+  @@index([workOrderId, createdAt])
+  @@index([authorUserId, createdAt])
 }
 
 model Assignment {
@@ -438,6 +522,23 @@ model EvidenceFile {
   @@index([uploadedById])
 }
 
+model SignedReport {
+  id            String    @id @default(cuid())
+  workOrderId   String?
+  workOrder     WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  signedById    String?
+  signedBy      User?     @relation(fields: [signedById], references: [id], onDelete: SetNull)
+  reportNumber  String    @unique
+  storageKey    String    @unique
+  checksum      String
+  signatureHash String
+  signedAt      DateTime
+  createdAt     DateTime  @default(now())
+
+  @@index([workOrderId])
+  @@index([signedById, signedAt])
+}
+
 model ClientApproval {
   id             String    @id @default(cuid())
   workOrderId    String
@@ -463,6 +564,40 @@ model PlantRecertification {
   source         String
 
   @@index([plantId, dueDate])
+}
+
+model RecertificationCycle {
+  id          String                    @id @default(cuid())
+  plantId     String
+  plant       Plant                     @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  code        String
+  label       String
+  startsAt    DateTime?
+  dueAt       DateTime
+  completedAt DateTime?
+  status      String                    @default("PENDING")
+  documents   RecertificationDocument[]
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  @@unique([plantId, code])
+  @@index([plantId, dueAt])
+  @@index([status, dueAt])
+}
+
+model RecertificationDocument {
+  id           String               @id @default(cuid())
+  cycleId      String
+  cycle        RecertificationCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  uploadedById String?
+  uploadedBy   User?                @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  fileName     String
+  storageKey   String               @unique
+  checksum     String
+  createdAt    DateTime             @default(now())
+
+  @@index([cycleId])
+  @@index([uploadedById, createdAt])
 }
 
 model ImportJob {
@@ -550,12 +685,16 @@ model AuditEvent {
   action      String
   before      Json?
   after       Json?
+  previousHash String?
+  eventHash   String?
   ip          String?
   userAgent   String?
   createdAt   DateTime @default(now())
 
   @@index([resource, resourceId])
   @@index([actorUserId, createdAt])
+  @@index([eventHash])
+  @@map("audit_events")
 }
 
 model IdempotencyKey {
@@ -583,6 +722,23 @@ model KpiDailySummary {
 
   @@unique([plantId, day])
   @@index([day])
+}
+
+model KpiDailyMeasure {
+  id        String   @id @default(cuid())
+  plantId   String?
+  plant     Plant?   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  day       DateTime
+  metric    String
+  value     Float
+  unit      String?
+  dimensions Json?
+  createdAt DateTime @default(now())
+
+  @@unique([plantId, day, metric])
+  @@index([day, metric])
+  @@index([plantId, day])
+  @@map("kpi_daily_measures")
 }
 
 model ReportRun {

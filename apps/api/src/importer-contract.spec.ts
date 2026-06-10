@@ -13,7 +13,7 @@ interface DryRunPayload {
 const repoRoot = resolve(__dirname, '../../..');
 const importer = resolve(repoRoot, 'apps/importer/main.py');
 const posiciones = resolve(repoRoot, '../Copia de Posiciones de mantenimiento ESSC Sur (17-04-2026).xlsx');
-const kks = resolve(repoRoot, '../26MayoPRUEBAPOWERBI/Arbol Jerarquico ESSC 2026 (Fiori).xlsx');
+const kks = resolve(repoRoot, '../archivo-versiones-antiguas/26MayoPRUEBAPOWERBI/Arbol Jerarquico ESSC 2026 (Fiori).xlsx');
 
 function dryRun(file: string, type: string) {
   const stdout = execFileSync('python3', [importer, 'dry-run', '--file', file, '--type', type], {

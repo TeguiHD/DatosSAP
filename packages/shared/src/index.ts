@@ -42,7 +42,7 @@ export const IMPORT_STATUSES = [
 ] as const;
 export type ImportStatus = (typeof IMPORT_STATUSES)[number];
 
-export const FREQUENCY_CODES = ['1M', '6M', '1A', '5A'] as const;
+export const FREQUENCY_CODES = ['ONE_MONTH', 'SIX_MONTHS', 'ONE_YEAR', 'FIVE_YEARS', 'CUSTOM'] as const;
 export type FrequencyCode = (typeof FREQUENCY_CODES)[number];
 
 export type Severity = 'INFO' | 'WARNING' | 'CRITICAL';
