@@ -187,6 +187,8 @@ model Plant {
   status            PlantStatus             @default(ACTIVE)
   latitude          Float?
   longitude         Float?
+  commissionedAt    DateTime?               @db.Date
+  centerCode        String?                 @db.VarChar(10)
   healthScore       Int?
   createdAt         DateTime                @default(now())
   updatedAt         DateTime                @updatedAt
@@ -578,7 +580,9 @@ model RecertificationCycle {
   code        String
   label       String
   startsAt    DateTime?
-  dueAt       DateTime
+  cycleYears  Int
+  dueAt       DateTime                  @db.Date
+  isIrregular Boolean                   @default(false)
   completedAt DateTime?
   status      String                    @default("PENDING")
   documents   RecertificationDocument[]
