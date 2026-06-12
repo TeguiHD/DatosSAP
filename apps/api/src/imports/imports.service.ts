@@ -47,6 +47,7 @@ interface KksExportRow {
   rowNumber: number;
   technicalObject: string;
   superiorObject?: string | null;
+  parentEquipmentCode?: string | null;
   nodeType: AssetNodeType;
   plantCode?: string | null;
   kks?: string | null;
@@ -280,7 +281,7 @@ export class ImportsService {
   }
 
   private async applyKks(importJobId: string, rows: KksExportRow[]) {
-    const imported = new Map<string, string>();
+    const importedByEquipmentCode = new Map<string, string>();
     for (const row of rows) {
       const plant = row.plantCode ? await this.resolvePlant(row.plantCode) : null;
       const workCenter = row.workCenter ? await this.resolveWorkCenter(row.workCenter) : null;
@@ -323,14 +324,19 @@ export class ImportsService {
           sourceHash: row.sourceHash,
         },
       });
-      imported.set(row.technicalObject, asset.id);
+      if (row.equipmentCode) {
+        importedByEquipmentCode.set(row.equipmentCode, asset.id);
+      }
     }
 
     for (const row of rows) {
-      const parentId = row.superiorObject ? imported.get(row.superiorObject) : undefined;
-      if (parentId) {
-        await this.prisma.assetKksNode.update({ where: { technicalObject: row.technicalObject }, data: { parentId } });
-      }
+      const parentId = row.parentEquipmentCode
+        ? importedByEquipmentCode.get(row.parentEquipmentCode)
+        : undefined;
+      await this.prisma.assetKksNode.update({
+        where: { technicalObject: row.technicalObject },
+        data: { parentId: parentId ?? null },
+      });
     }
 
     await this.recordImportRows(

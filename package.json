@@ -10,7 +10,8 @@
     "build": "pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm -r --if-present test && pnpm test:importer",
+    "test:importer": "python3 -m pytest apps/importer/tests",
     "prisma:validate": "pnpm --filter @datos/api prisma validate",
     "importer:dry-run": "python3 apps/importer/main.py dry-run"
   },

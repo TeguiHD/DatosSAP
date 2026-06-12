@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -24,7 +25,7 @@ function dryRun(file: string, type: string) {
 }
 
 describe('industrial Excel importer contract', () => {
-  it('reads Posiciones ESSC Sur with cached formulas and blocks CEMIN', () => {
+  it.skipIf(!existsSync(posiciones))('reads Posiciones ESSC Sur with cached formulas and blocks CEMIN', () => {
     const result = dryRun(posiciones, 'POSICIONES_ESSC_SUR');
 
     expect(result.metadata.templates).toBe(283);
@@ -33,10 +34,14 @@ describe('industrial Excel importer contract', () => {
     expect(result.issues.some((issue) => issue.code === 'CEMIN_ALIAS_REQUIRED' && issue.severity === 'CRITICAL')).toBe(true);
   });
 
-  it('reads KKS Fiori as the asset master', () => {
+  it.skipIf(!existsSync(kks))('reads KKS Fiori as the asset master', () => {
     const result = dryRun(kks, 'KKS_FIORI');
 
     expect(result.metadata.rows).toBe(4837);
+    expect(result.metadata.root_nodes).toBe(27);
+    expect(result.metadata.resolved_parent_refs).toBe(4810);
+    expect(result.metadata.missing_parent_refs).toBe(0);
+    expect(result.errors).toBe(0);
     expect(result.file_type).toBe('KKS_FIORI');
   });
 });

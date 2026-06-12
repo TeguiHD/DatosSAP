@@ -11,25 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from openpyxl import load_workbook
-
-
-KKS_HEADERS = [
-    "Clase de objeto tecnico",
-    "Objeto tecnico superior",
-    "Objeto tecnico",
-    "Grupo de planificacion",
-    "Emplazamiento",
-    "Puesto de trabajo principal",
-    "Estado del sistema",
-    "Centro de emplazamiento",
-    "Centro de coste",
-    "Elemento PEP",
-    "KKS",
-    "Descripcion KKS",
-    "Equipo",
-    "Descripcion Equipo",
-    "Centro",
-]
+from parsers.kks_parser import KksDryRun, parse_kks_file
 
 
 @dataclass
@@ -108,91 +90,8 @@ def detect_file(path: Path) -> str:
     raise ValueError(f"Unsupported Excel structure: {path.name}")
 
 
-def parse_kks(path: Path) -> DryRun:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook["KKS ESSC General"] if "KKS ESSC General" in workbook.sheetnames else workbook[workbook.sheetnames[0]]
-    rows = sheet.iter_rows(values_only=True)
-    header = [normalize_header(value) for value in next(rows)]
-    header_index = {name: index for index, name in enumerate(header)}
-    missing_headers = [name for name in KKS_HEADERS if name not in header_index]
-    issues = [
-        Issue(
-            severity="CRITICAL",
-            code="KKS_HEADER_MISSING",
-            message=f"Missing expected header: {name}",
-            suggested_action="Review the Fiori export layout before apply.",
-        )
-        for name in missing_headers
-    ]
-
-    object_idx = header_index.get("Objeto tecnico")
-    parent_idx = header_index.get("Objeto tecnico superior")
-    type_idx = header_index.get("Clase de objeto tecnico")
-    center_idx = header_index.get("Centro")
-
-    objects: set[str] = set()
-    parent_refs: list[tuple[int, str]] = []
-    class_counts: Counter[str] = Counter()
-    center_counts: Counter[str] = Counter()
-    duplicate_objects: Counter[str] = Counter()
-    row_count = 0
-
-    for row_number, row in enumerate(rows, start=2):
-        if not non_empty(row):
-            continue
-        row_count += 1
-        technical_object = str(row[object_idx]).strip() if object_idx is not None and row[object_idx] else ""
-        parent = str(row[parent_idx]).strip() if parent_idx is not None and row[parent_idx] else ""
-        node_type = str(row[type_idx]).strip() if type_idx is not None and row[type_idx] else "UNKNOWN"
-        center = str(row[center_idx]).strip() if center_idx is not None and row[center_idx] else "UNKNOWN"
-        if technical_object:
-            duplicate_objects[technical_object] += 1
-            objects.add(technical_object)
-        if parent:
-            parent_refs.append((row_number, parent))
-        class_counts[node_type] += 1
-        center_counts[center] += 1
-        _ = row_hash(row)
-
-    missing_parent_refs = [(row_number, parent) for row_number, parent in parent_refs if parent not in objects]
-    for row_number, parent in missing_parent_refs[:20]:
-        issues.append(
-            Issue(
-                severity="WARNING",
-                code="KKS_PARENT_NOT_FOUND",
-                message=f"Parent object was not found in source: {parent}",
-                row_number=row_number,
-                suggested_action="Keep node importable but mark hierarchy issue for review.",
-            )
-        )
-
-    duplicate_count = sum(count - 1 for count in duplicate_objects.values() if count > 1)
-    if duplicate_count:
-        issues.append(
-            Issue(
-                severity="WARNING",
-                code="KKS_DUPLICATE_OBJECTS",
-                message=f"Detected {duplicate_count} duplicate technical object rows.",
-                suggested_action="Use source hash and latest row to reconcile duplicates.",
-            )
-        )
-
-    return DryRun(
-        file_type="KKS_FIORI",
-        created=row_count,
-        updated=0,
-        skipped=0,
-        errors=len([issue for issue in issues if issue.severity == "CRITICAL"]),
-        issues=issues,
-        metadata={
-            "sheet": sheet.title,
-            "rows": row_count,
-            "technical_locations": class_counts.get("Ubicacion tecnica", 0) + class_counts.get("Ubicación técnica", 0),
-            "equipment": class_counts.get("Equipo", 0),
-            "centers": dict(center_counts.most_common(8)),
-            "missing_parent_refs": len(missing_parent_refs),
-        },
-    )
+def parse_kks(path: Path) -> KksDryRun:
+    return parse_kks_file(path).dry_run()
 
 
 def parse_posiciones(path: Path) -> DryRun:
@@ -352,44 +251,7 @@ def parse_planes(path: Path) -> DryRun:
 
 
 def export_kks(path: Path) -> dict[str, Any]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook["KKS ESSC General"] if "KKS ESSC General" in workbook.sheetnames else workbook[workbook.sheetnames[0]]
-    rows = sheet.iter_rows(values_only=True)
-    header = [normalize_header(value) for value in next(rows)]
-    header_index = {name: index for index, name in enumerate(header)}
-    parsed_rows: list[dict[str, Any]] = []
-
-    for row_number, row in enumerate(rows, start=2):
-        if not non_empty(row):
-            continue
-        technical_object = str(row[header_index["Objeto tecnico"]]).strip()
-        node_class = str(row[header_index["Clase de objeto tecnico"]]).strip()
-        plant_code = plant_code_from(technical_object) or plant_code_from(row[header_index.get("Centro", 0)])
-        parsed_rows.append(
-            {
-                "rowNumber": row_number,
-                "technicalObject": technical_object,
-                "superiorObject": str(row[header_index["Objeto tecnico superior"]]).strip()
-                if row[header_index["Objeto tecnico superior"]]
-                else None,
-                "nodeType": "EQUIPMENT" if "Equipo" in node_class else "TECHNICAL_LOCATION",
-                "plantCode": plant_code,
-                "kks": json_value(row[header_index["KKS"]]),
-                "kksDescription": json_value(row[header_index["Descripcion KKS"]]),
-                "equipmentCode": json_value(row[header_index["Equipo"]]),
-                "equipmentDescription": json_value(row[header_index["Descripcion Equipo"]]),
-                "planningGroup": json_value(row[header_index["Grupo de planificacion"]]),
-                "site": json_value(row[header_index["Emplazamiento"]]),
-                "systemStatus": json_value(row[header_index["Estado del sistema"]]),
-                "center": json_value(row[header_index["Centro"]]),
-                "workCenter": json_value(row[header_index["Puesto de trabajo principal"]]),
-                "costCenter": json_value(row[header_index["Centro de coste"]]),
-                "raw": raw_row(header, row),
-                "sourceHash": row_hash(row),
-            }
-        )
-
-    return {"fileType": "KKS_FIORI", "rows": parsed_rows}
+    return parse_kks_file(path).export_payload()
 
 
 def export_posiciones(path: Path) -> dict[str, Any]:
@@ -495,12 +357,12 @@ def export_rows(path: Path, file_type: str | None) -> dict[str, Any]:
     raise ValueError(f"Unsupported file type: {detected}")
 
 
-def to_json(result: DryRun) -> str:
+def to_json(result: DryRun | KksDryRun) -> str:
     payload = asdict(result)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
-def dry_run(path: Path, file_type: str | None) -> DryRun:
+def dry_run(path: Path, file_type: str | None) -> DryRun | KksDryRun:
     detected = file_type or detect_file(path)
     if detected == "KKS_FIORI":
         return parse_kks(path)
