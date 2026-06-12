@@ -20,7 +20,17 @@ def test_posiciones_counts_real_excel() -> None:
     assert result.metadata["templates"] == 283
     assert result.metadata["month_columns"] == 96
     assert result.metadata["occurrences"] == 3061
-    assert any(issue.code == "CEMIN_ALIAS_REQUIRED" for issue in result.issues)
+    critical_issues = [
+        issue
+        for issue in result.issues
+        if issue.severity == "CRITICAL"
+    ]
+    assert result.created == 283
+    assert result.skipped == 0
+    assert result.errors == 1
+    assert [issue.code for issue in critical_issues] == [
+        "CEMIN_ALIAS_REQUIRED"
+    ]
 
 
 def test_kks_counts_real_excel() -> None:

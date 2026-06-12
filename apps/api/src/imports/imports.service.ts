@@ -71,15 +71,23 @@ interface PosicionesTemplateRow {
   planName?: string | null;
   routeSheet?: string | null;
   technicalLocation?: string | null;
+  technicalObject?: string | null;
   equipment?: string | null;
+  equipmentCode?: string | null;
   sourcePosition?: string | null;
   activityName?: string | null;
   frequencyLabel?: string | null;
   frequency: string;
+  sourceFrequency?: string | null;
   monthsInterval?: number | null;
   startMonth?: number | null;
+  estimatedHours?: number | null;
+  contextInferred?: boolean;
+  idempotencyHash: string;
   occurrences: {
     scheduledFor: string;
+    dueDate: string;
+    isHistorical: boolean;
     sourceMonthKey: string;
     sourceValue: string;
     sourceHash: string;
@@ -157,7 +165,13 @@ export class ImportsService {
       throw new NotFoundException('Import job not found');
     }
 
-    const dryRun = await this.runImporter<DryRunPayload>('dry-run', job.storageKey ?? job.originalName, job.fileType);
+    const rawDryRun = await this.runImporter<DryRunPayload>('dry-run', job.storageKey ?? job.originalName, job.fileType);
+    const issues = await this.excludeResolvedIssues(rawDryRun.issues);
+    const dryRun = {
+      ...rawDryRun,
+      issues,
+      errors: issues.filter((issue) => issue.severity === IssueSeverity.CRITICAL).length,
+    };
     const hasCritical = dryRun.issues.some((issue) => issue.severity === IssueSeverity.CRITICAL);
 
     return this.prisma.$transaction(async (tx) => {
@@ -358,9 +372,14 @@ export class ImportsService {
       }
       const plant = await this.resolvePlant(row.plantCode);
       const frequency = await this.resolveFrequency(row.frequency, row.frequencyLabel, row.monthsInterval);
-      const asset = await this.findAsset(row.technicalLocation, row.equipment);
+      const asset = await this.findAsset(
+        row.equipmentCode ?? row.equipment,
+        row.technicalObject ?? row.technicalLocation,
+        row.plantCode,
+        plant.code,
+      );
       const template = await this.prisma.maintenanceTemplate.upsert({
-        where: { sourceHash: row.sourceHash },
+        where: { idempotencyHash: row.idempotencyHash },
         update: {
           plantId: plant.id,
           assetNodeId: asset?.id ?? null,
@@ -371,6 +390,8 @@ export class ImportsService {
           activityName: row.activityName ?? row.planName ?? `Mantencion ${row.rowNumber}`,
           wbsElement: row.wbsElement ?? null,
           startMonth: row.startMonth ?? null,
+          estimatedHours: row.estimatedHours ?? null,
+          sourceHash: row.sourceHash,
         },
         create: {
           plantId: plant.id,
@@ -382,6 +403,8 @@ export class ImportsService {
           activityName: row.activityName ?? row.planName ?? `Mantencion ${row.rowNumber}`,
           wbsElement: row.wbsElement ?? null,
           startMonth: row.startMonth ?? null,
+          estimatedHours: row.estimatedHours ?? null,
+          idempotencyHash: row.idempotencyHash,
           sourceHash: row.sourceHash,
         },
       });
@@ -393,6 +416,8 @@ export class ImportsService {
             plantId: plant.id,
             assetNodeId: asset?.id ?? null,
             scheduledFor: new Date(occurrence.scheduledFor),
+            dueDate: new Date(occurrence.dueDate),
+            isHistorical: occurrence.isHistorical,
             sourceMonthKey: occurrence.sourceMonthKey,
           },
           create: {
@@ -400,6 +425,8 @@ export class ImportsService {
             plantId: plant.id,
             assetNodeId: asset?.id ?? null,
             scheduledFor: new Date(occurrence.scheduledFor),
+            dueDate: new Date(occurrence.dueDate),
+            isHistorical: occurrence.isHistorical,
             sourceMonthKey: occurrence.sourceMonthKey,
             sourceHash: occurrence.sourceHash,
           },
@@ -425,7 +452,7 @@ export class ImportsService {
         throw new BadRequestException(`Missing plant code in Planes row ${row.rowNumber}`);
       }
       const plant = await this.resolvePlant(row.plantCode);
-      const asset = await this.findAsset(row.kks, row.equipment);
+      const asset = await this.findAsset(row.equipment);
       const workOrder = await this.prisma.workOrder.upsert({
         where: { code: `OT-${row.planId}` },
         update: {
@@ -547,18 +574,44 @@ export class ImportsService {
     });
   }
 
-  private async findAsset(technicalObject?: string | null, equipment?: string | null) {
-    if (technicalObject) {
+  private async findAsset(
+    equipmentCode?: string | null,
+    technicalObject?: string | null,
+    sourcePlantCode?: string | null,
+    canonicalPlantCode?: string | null,
+  ) {
+    const normalizeCode = (value?: string | null) => {
+      if (!value) return null;
+      if (
+        sourcePlantCode &&
+        canonicalPlantCode &&
+        sourcePlantCode !== canonicalPlantCode &&
+        value.startsWith(sourcePlantCode)
+      ) {
+        return `${canonicalPlantCode}${value.slice(sourcePlantCode.length)}`;
+      }
+      return value;
+    };
+    const normalizedEquipment = normalizeCode(equipmentCode);
+    const normalizedTechnicalObject = normalizeCode(technicalObject);
+
+    if (normalizedEquipment) {
       const asset = await this.prisma.assetKksNode.findFirst({
-        where: { OR: [{ technicalObject }, { kks: technicalObject }] },
+        where: { equipmentCode: normalizedEquipment },
       });
       if (asset) {
         return asset;
       }
     }
-    if (equipment) {
+
+    if (normalizedTechnicalObject) {
       return this.prisma.assetKksNode.findFirst({
-        where: { OR: [{ technicalObject: equipment }, { equipmentCode: equipment }, { kks: equipment }] },
+        where: {
+          OR: [
+            { equipmentCode: normalizedTechnicalObject },
+            { technicalObject: normalizedTechnicalObject },
+          ],
+        },
       });
     }
     return null;
@@ -582,11 +635,45 @@ export class ImportsService {
   }
 
   private mapFrequency(source: string): FrequencyCode {
+    if (source === FrequencyCode.ONE_MONTH) return FrequencyCode.ONE_MONTH;
+    if (source === FrequencyCode.SIX_MONTHS) return FrequencyCode.SIX_MONTHS;
+    if (source === FrequencyCode.ONE_YEAR) return FrequencyCode.ONE_YEAR;
+    if (source === FrequencyCode.FIVE_YEARS) return FrequencyCode.FIVE_YEARS;
+    if (source === FrequencyCode.CUSTOM) return FrequencyCode.CUSTOM;
     if (source === '1M') return FrequencyCode.ONE_MONTH;
     if (source === '6M') return FrequencyCode.SIX_MONTHS;
     if (source === '1A') return FrequencyCode.ONE_YEAR;
     if (source === '5A') return FrequencyCode.FIVE_YEARS;
     return FrequencyCode.CUSTOM;
+  }
+
+  private async excludeResolvedIssues(issues: ImporterIssue[]) {
+    const hasCeminIssue = issues.some((issue) => issue.code === 'CEMIN_ALIAS_REQUIRED');
+    if (!hasCeminIssue) {
+      return issues;
+    }
+    const [mapping, alias] = await Promise.all([
+      this.prisma.importMapping.findUnique({
+        where: {
+          sourceType_sourceValue: {
+            sourceType: 'PLANT_ALIAS',
+            sourceValue: 'ESZS-A1',
+          },
+        },
+      }),
+      this.prisma.plantAlias.findUnique({
+        where: {
+          aliasCode_source: {
+            aliasCode: 'ESZS-A1',
+            source: 'import',
+          },
+        },
+      }),
+    ]);
+    if (!mapping?.targetPlantId && !alias?.plantId) {
+      return issues;
+    }
+    return issues.filter((issue) => issue.code !== 'CEMIN_ALIAS_REQUIRED');
   }
 
   private frequencyMonths(code: FrequencyCode) {

@@ -12,6 +12,10 @@ from typing import Any, Iterable
 
 from openpyxl import load_workbook
 from parsers.kks_parser import KksDryRun, parse_kks_file
+from parsers.positions_parser import (
+    PositionsDryRun,
+    parse_positions_file,
+)
 
 
 @dataclass
@@ -94,96 +98,8 @@ def parse_kks(path: Path) -> KksDryRun:
     return parse_kks_file(path).dry_run()
 
 
-def parse_posiciones(path: Path) -> DryRun:
-    values_workbook = load_workbook(path, read_only=True, data_only=True)
-    formula_workbook = load_workbook(path, read_only=True, data_only=False)
-    sheet = values_workbook["Actividades MP ESSC Sur"]
-    formula_sheet = formula_workbook["Actividades MP ESSC Sur"]
-    header_row = 5
-    header = list(next(sheet.iter_rows(min_row=header_row, max_row=header_row, values_only=True)))
-    month_columns = [
-        (index, value)
-        for index, value in enumerate(header)
-        if index >= 12 and isinstance(value, datetime)
-    ]
-    issues: list[Issue] = []
-    if len(month_columns) != 96:
-        issues.append(
-            Issue(
-                severity="CRITICAL",
-                code="POSITION_MONTH_COUNT_INVALID",
-                message=f"Expected 96 month columns, found {len(month_columns)}.",
-                suggested_action="Verify the header row and Excel export.",
-            )
-        )
-
-    template_count = 0
-    occurrence_count = 0
-    frequency_counts: Counter[str] = Counter()
-    occurrence_counts: Counter[str] = Counter()
-    cemin_rows: list[int] = []
-    formulas_seen = False
-
-    value_rows = sheet.iter_rows(min_row=header_row + 1, values_only=True)
-    formula_rows = formula_sheet.iter_rows(min_row=header_row + 1, values_only=True)
-    for row_number, (row, formula_row) in enumerate(zip(value_rows, formula_rows), start=header_row + 1):
-        if not non_empty(row):
-            continue
-        template_count += 1
-        frequency = str(row[9]).strip() if len(row) > 9 and row[9] else ""
-        formula_frequency = str(formula_row[9]).strip() if len(formula_row) > 9 and formula_row[9] else ""
-        if formula_frequency.startswith("="):
-            formulas_seen = True
-        frequency_counts[frequency] += 1
-        location = str(row[4]).strip() if len(row) > 4 and row[4] else ""
-        if "ESZS-A1" in location:
-            cemin_rows.append(row_number)
-        for index, month in month_columns:
-            value = row[index] if index < len(row) else None
-            if value not in (None, ""):
-                occurrence_count += 1
-                occurrence_counts[str(value).strip()] += 1
-                _ = month
-
-    if formulas_seen:
-        issues.append(
-            Issue(
-                severity="INFO",
-                code="POSITION_FREQUENCY_FORMULAS",
-                message="Frec. column contains formulas in workbook; importer used data_only=True cached values.",
-                suggested_action="Keep data_only=True enabled for this file type.",
-            )
-        )
-    if cemin_rows:
-        issues.append(
-            Issue(
-                severity="CRITICAL",
-                code="CEMIN_ALIAS_REQUIRED",
-                message="CEMIN appears as ESZS-A1 but KKS Fiori uses ESZS-B2 / PLANTA 012 CEMIN CATEMU.",
-                row_number=cemin_rows[0],
-                suggested_action="Create PlantAlias or ImportMapping ESZS-A1 -> ESZS-B2 before apply.",
-            )
-        )
-
-    return DryRun(
-        file_type="POSICIONES_ESSC_SUR",
-        created=template_count + occurrence_count,
-        updated=0,
-        skipped=0,
-        errors=len([issue for issue in issues if issue.severity == "CRITICAL"]),
-        issues=issues,
-        metadata={
-            "sheet": sheet.title,
-            "header_row": header_row,
-            "templates": template_count,
-            "month_columns": len(month_columns),
-            "occurrences": occurrence_count,
-            "frequencies": dict(frequency_counts),
-            "occurrences_by_frequency": dict(occurrence_counts),
-            "first_month": month_columns[0][1].date().isoformat() if month_columns else "",
-            "last_month": month_columns[-1][1].date().isoformat() if month_columns else "",
-        },
-    )
+def parse_posiciones(path: Path) -> PositionsDryRun:
+    return parse_positions_file(path).dry_run()
 
 
 def parse_planes(path: Path) -> DryRun:
@@ -255,57 +171,7 @@ def export_kks(path: Path) -> dict[str, Any]:
 
 
 def export_posiciones(path: Path) -> dict[str, Any]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook["Actividades MP ESSC Sur"]
-    header_row = 5
-    header = list(next(sheet.iter_rows(min_row=header_row, max_row=header_row, values_only=True)))
-    normalized_header = [normalize_header(value) for value in header]
-    month_columns = [
-        (index, value)
-        for index, value in enumerate(header)
-        if index >= 12 and isinstance(value, datetime)
-    ]
-    templates: list[dict[str, Any]] = []
-
-    for row_number, row in enumerate(sheet.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
-        if not non_empty(row):
-            continue
-        location = str(row[4]).strip() if len(row) > 4 and row[4] else ""
-        frequency = str(row[9]).strip() if len(row) > 9 and row[9] else "CUSTOM"
-        occurrences: list[dict[str, Any]] = []
-        for index, month in month_columns:
-            value = row[index] if index < len(row) else None
-            if value not in (None, ""):
-                occurrences.append(
-                    {
-                        "scheduledFor": datetime(month.year, month.month, 1).isoformat(),
-                        "sourceMonthKey": f"{month.year}-{month.month:02d}",
-                        "sourceValue": str(value).strip(),
-                        "sourceHash": hashlib.sha256(f"{row_hash(row)}:{month.year}-{month.month:02d}:{value}".encode()).hexdigest(),
-                    }
-                )
-        templates.append(
-            {
-                "rowNumber": row_number,
-                "plantCode": plant_code_from(location),
-                "wbsElement": json_value(row[1] if len(row) > 1 else None),
-                "planName": json_value(row[2] if len(row) > 2 else None),
-                "routeSheet": json_value(row[3] if len(row) > 3 else None),
-                "technicalLocation": location,
-                "equipment": json_value(row[5] if len(row) > 5 else None),
-                "sourcePosition": json_value(row[6] if len(row) > 6 else None),
-                "activityName": json_value(row[7] if len(row) > 7 else None),
-                "frequencyLabel": json_value(row[8] if len(row) > 8 else None),
-                "frequency": frequency,
-                "monthsInterval": int(row[10]) if len(row) > 10 and isinstance(row[10], (int, float)) else None,
-                "startMonth": int(row[11]) if len(row) > 11 and isinstance(row[11], (int, float)) else None,
-                "occurrences": occurrences,
-                "raw": raw_row(normalized_header, row),
-                "sourceHash": row_hash(row),
-            }
-        )
-
-    return {"fileType": "POSICIONES_ESSC_SUR", "templates": templates}
+    return parse_positions_file(path).export_payload()
 
 
 def export_planes(path: Path) -> dict[str, Any]:
@@ -357,12 +223,17 @@ def export_rows(path: Path, file_type: str | None) -> dict[str, Any]:
     raise ValueError(f"Unsupported file type: {detected}")
 
 
-def to_json(result: DryRun | KksDryRun) -> str:
+def to_json(
+    result: DryRun | KksDryRun | PositionsDryRun,
+) -> str:
     payload = asdict(result)
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
-def dry_run(path: Path, file_type: str | None) -> DryRun | KksDryRun:
+def dry_run(
+    path: Path,
+    file_type: str | None,
+) -> DryRun | KksDryRun | PositionsDryRun:
     detected = file_type or detect_file(path)
     if detected == "KKS_FIORI":
         return parse_kks(path)

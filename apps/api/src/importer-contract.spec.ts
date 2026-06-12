@@ -31,7 +31,16 @@ describe('industrial Excel importer contract', () => {
     expect(result.metadata.templates).toBe(283);
     expect(result.metadata.month_columns).toBe(96);
     expect(result.metadata.occurrences).toBe(3061);
-    expect(result.issues.some((issue) => issue.code === 'CEMIN_ALIAS_REQUIRED' && issue.severity === 'CRITICAL')).toBe(true);
+    expect(result.metadata.context_inferred_rows).toBe(95);
+    expect(result.metadata.asset_context_missing_rows).toBe(95);
+    expect(result.metadata.cemin_rows).toBe(34);
+    expect(result.metadata.unknown_frequency_rows).toBe(0);
+    expect(result.metadata.unknown_plant_rows).toBe(0);
+    expect(result.created).toBe(283);
+    expect(result.errors).toBe(1);
+    expect(result.issues.filter((issue) => issue.severity === 'CRITICAL')).toEqual([
+      expect.objectContaining({ code: 'CEMIN_ALIAS_REQUIRED' }),
+    ]);
   });
 
   it.skipIf(!existsSync(kks))('reads KKS Fiori as the asset master', () => {

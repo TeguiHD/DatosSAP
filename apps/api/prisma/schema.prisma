@@ -334,7 +334,9 @@ model MaintenanceTemplate {
   activityName       String
   wbsElement         String?
   startMonth         Int?
+  estimatedHours     Float?
   requiresEvidence   Boolean                 @default(true)
+  idempotencyHash    String                  @unique
   sourceHash         String                  @unique
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
@@ -353,7 +355,9 @@ model MaintenanceOccurrence {
   plant          Plant              @relation(fields: [plantId], references: [id], onDelete: Cascade)
   assetNodeId    String?
   assetNode      AssetKksNode?      @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
-  scheduledFor   DateTime
+  scheduledFor   DateTime           @db.Date
+  dueDate        DateTime           @db.Date
+  isHistorical   Boolean            @default(false)
   status         OccurrenceStatus   @default(SCHEDULED)
   sourceMonthKey String
   sourceHash     String             @unique
@@ -364,6 +368,7 @@ model MaintenanceOccurrence {
   @@index([plantId, scheduledFor])
   @@index([status, scheduledFor])
   @@index([assetNodeId])
+  @@unique([templateId, scheduledFor])
 }
 
 model WorkOrder {
