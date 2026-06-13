@@ -64,6 +64,8 @@ interface KksExportRow {
   sourceHash: string;
 }
 
+type ResolvedPlant = { id: string; code: string };
+
 interface PosicionesTemplateRow {
   rowNumber: number;
   plantCode?: string | null;
@@ -296,8 +298,9 @@ export class ImportsService {
 
   private async applyKks(importJobId: string, rows: KksExportRow[]) {
     const importedByEquipmentCode = new Map<string, string>();
+    const plantCache = new Map<string, ResolvedPlant | null>();
     for (const row of rows) {
-      const plant = row.plantCode ? await this.resolvePlant(row.plantCode) : null;
+      const plant = await this.resolveKksPlant(row, plantCache);
       const workCenter = row.workCenter ? await this.resolveWorkCenter(row.workCenter) : null;
       const costCenter = row.costCenter ? await this.resolveCostCenter(row.costCenter) : null;
       const asset = await this.prisma.assetKksNode.upsert({
@@ -520,6 +523,64 @@ export class ImportsService {
       })),
       skipDuplicates: true,
     });
+  }
+
+  private async resolveKksPlant(
+    row: KksExportRow,
+    cache: Map<string, ResolvedPlant | null> = new Map(),
+  ): Promise<ResolvedPlant | null> {
+    const candidates = this.extractKksPlantCandidates(row);
+    for (const candidate of candidates) {
+      if (cache.has(candidate)) {
+        const cached = cache.get(candidate) ?? null;
+        if (cached) {
+          return cached;
+        }
+        continue;
+      }
+
+      const direct = await this.prisma.plant.findUnique({
+        where: { code: candidate },
+        select: { id: true, code: true },
+      });
+      if (direct) {
+        cache.set(candidate, direct);
+        return direct;
+      }
+
+      const alias = await this.prisma.plantAlias.findFirst({
+        where: { aliasCode: candidate },
+        include: { plant: { select: { id: true, code: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      const resolved = alias?.plant ?? null;
+      cache.set(candidate, resolved);
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return null;
+  }
+
+  private extractKksPlantCandidates(row: KksExportRow) {
+    const values = [
+      row.plantCode,
+      row.kks,
+      row.technicalObject,
+      row.equipmentCode,
+      row.superiorObject,
+      row.parentEquipmentCode,
+    ];
+    const candidates = new Set<string>();
+    for (const value of values) {
+      if (!value) {
+        continue;
+      }
+      for (const match of value.matchAll(/ESZS-[A-Z0-9]+/g)) {
+        candidates.add(match[0]);
+      }
+    }
+    return [...candidates];
   }
 
   private async resolvePlant(sourceCode: string) {
