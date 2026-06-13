@@ -389,8 +389,11 @@ model WorkOrder {
   plannedStart     DateTime?
   plannedEnd       DateTime?
   plannedHours     Float?
+  actualHours      Float?
+  requiredSpecialty String?
   importedProgress Float?
   progress         Float                  @default(0)
+  metadata         Json?
   createdById      String?
   createdBy        User?                  @relation("WorkOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   assignedUserId   String?

@@ -101,10 +101,13 @@ interface PosicionesTemplateRow {
 interface PlanesWorkOrderRow {
   rowNumber: number;
   planId: string;
-  plantCode?: string | null;
+  workOrderNumber?: string | null;
+  equipmentNumber?: string | null;
   equipment?: string | null;
   kks?: string | null;
   title: string;
+  scheduledStartDate?: string | null;
+  scheduledEndDate?: string | null;
   plannedStart?: string | null;
   plannedEnd?: string | null;
   plannedHours?: number | null;
@@ -112,9 +115,10 @@ interface PlanesWorkOrderRow {
   importedProgress?: number | null;
   status?: string | null;
   criticality?: string | null;
-  workCenter?: string | null;
+  requiredSpecialty?: string | null;
   specialty?: string | null;
   assignedTo?: string | null;
+  metadata?: Record<string, unknown>;
   raw: Record<string, unknown>;
   sourceHash: string;
 }
@@ -167,7 +171,11 @@ export class ImportsService {
       throw new NotFoundException('Import job not found');
     }
 
-    const rawDryRun = await this.runImporter<DryRunPayload>('dry-run', job.storageKey ?? job.originalName, job.fileType);
+    const rawDryRun = await this.enrichDryRun(
+      job.fileType,
+      job.storageKey ?? job.originalName,
+      await this.runImporter<DryRunPayload>('dry-run', job.storageKey ?? job.originalName, job.fileType),
+    );
     const issues = await this.excludeResolvedIssues(rawDryRun.issues);
     const dryRun = {
       ...rawDryRun,
@@ -201,6 +209,46 @@ export class ImportsService {
         include: { issues: true },
       });
     });
+  }
+
+  private async enrichDryRun(fileType: ImportFileType, file: string, dryRun: DryRunPayload): Promise<DryRunPayload> {
+    if (fileType !== ImportFileType.PLANES_MANTENCION) {
+      return dryRun;
+    }
+
+    const exported = await this.runImporter<PlanesExportPayload>('export', file, fileType);
+    const resolution = await this.resolvePlansRows(exported.workOrders);
+    const issues: ImporterIssue[] = [...dryRun.issues];
+
+    if (resolution.assetMissing > 0) {
+      issues.push({
+        severity: IssueSeverity.WARNING,
+        code: 'PLANES_ASSET_NOT_FOUND',
+        message: `${resolution.assetMissing} ordenes no encontraron activo por Equipo.`,
+        suggested_action: 'Revisar el numero de equipo en Planes Mantencion o el maestro KKS.',
+      });
+    }
+    if (resolution.plantMissing > 0) {
+      issues.push({
+        severity: IssueSeverity.WARNING,
+        code: 'PLANES_PLANT_NOT_RESOLVED',
+        message: `${resolution.plantMissing} ordenes no pudieron resolver planta desde el activo.`,
+        suggested_action: 'Aplicar KKS antes de importar Planes o corregir el activo origen.',
+      });
+    }
+
+    return {
+      ...dryRun,
+      issues,
+      errors: issues.filter((issue) => issue.severity === IssueSeverity.CRITICAL).length,
+      metadata: {
+        ...dryRun.metadata,
+        asset_resolved: resolution.assetResolved,
+        plant_resolved: resolution.plantResolved,
+        asset_missing: resolution.assetMissing,
+        plant_missing: resolution.plantMissing,
+      },
+    };
   }
 
   async resolveIssue(id: string, issueId: string, resolution: unknown) {
@@ -451,45 +499,53 @@ export class ImportsService {
 
   private async applyPlanes(importJobId: string, rows: PlanesWorkOrderRow[]) {
     for (const row of rows) {
-      if (!row.plantCode) {
-        throw new BadRequestException(`Missing plant code in Planes row ${row.rowNumber}`);
+      const workOrderNumber = row.workOrderNumber ?? `PLAN-${row.planId}`;
+      const equipmentNumber = row.equipmentNumber ?? row.equipment;
+      const asset = await this.resolvePlanAsset(equipmentNumber);
+      if (!asset) {
+        throw new BadRequestException(`Missing asset for Planes row ${row.rowNumber}: ${equipmentNumber ?? 'sin equipo'}`);
       }
-      const plant = await this.resolvePlant(row.plantCode);
-      const asset = await this.findAsset(row.equipment);
-      const workOrder = await this.prisma.workOrder.upsert({
-        where: { code: `OT-${row.planId}` },
+      if (!asset.plantId) {
+        throw new BadRequestException(`Missing plant for Planes row ${row.rowNumber}: ${equipmentNumber}`);
+      }
+      const metadata = row.metadata ?? {
+        sourcePlanId: row.planId,
+        kks: row.kks,
+        especialidad: row.specialty,
+        personalAsignado: row.assignedTo,
+      };
+      await this.prisma.workOrder.upsert({
+        where: { code: workOrderNumber },
         update: {
-          plantId: plant.id,
-          assetNodeId: asset?.id ?? null,
-          title: row.title,
-          plannedStart: row.plannedStart ? new Date(row.plannedStart) : null,
-          plannedEnd: row.plannedEnd ? new Date(row.plannedEnd) : null,
-          plannedHours: row.plannedHours ?? null,
-          importedProgress: row.importedProgress ?? null,
-          criticality: this.mapCriticality(row.criticality),
-        },
-        create: {
-          code: `OT-${row.planId}`,
-          plantId: plant.id,
-          assetNodeId: asset?.id ?? null,
+          plantId: asset.plantId,
+          assetNodeId: asset.id,
           title: row.title,
           status: this.mapStatus(row.status),
-          plannedStart: row.plannedStart ? new Date(row.plannedStart) : null,
-          plannedEnd: row.plannedEnd ? new Date(row.plannedEnd) : null,
+          plannedStart: this.parseOptionalDate(row.scheduledStartDate ?? row.plannedStart),
+          plannedEnd: this.parseOptionalDate(row.scheduledEndDate ?? row.plannedEnd),
           plannedHours: row.plannedHours ?? null,
+          actualHours: row.actualHours ?? null,
           importedProgress: row.importedProgress ?? null,
           criticality: this.mapCriticality(row.criticality),
+          requiredSpecialty: row.requiredSpecialty ?? null,
+          metadata: this.asJson(metadata),
+        },
+        create: {
+          code: workOrderNumber,
+          plantId: asset.plantId,
+          assetNodeId: asset.id,
+          title: row.title,
+          status: this.mapStatus(row.status),
+          plannedStart: this.parseOptionalDate(row.scheduledStartDate ?? row.plannedStart),
+          plannedEnd: this.parseOptionalDate(row.scheduledEndDate ?? row.plannedEnd),
+          plannedHours: row.plannedHours ?? null,
+          actualHours: row.actualHours ?? null,
+          importedProgress: row.importedProgress ?? null,
+          criticality: this.mapCriticality(row.criticality),
+          requiredSpecialty: row.requiredSpecialty ?? null,
+          metadata: this.asJson(metadata),
         },
       });
-      await this.ensureMilestones(workOrder.id);
-      if ((row.actualHours ?? 0) > 0) {
-        const existing = await this.prisma.hhEntry.count({ where: { workOrderId: workOrder.id } });
-        if (!existing) {
-          await this.prisma.hhEntry.create({
-            data: { workOrderId: workOrder.id, hours: row.actualHours ?? 0, entryDate: new Date(), notes: 'HH importadas desde Excel Planes Mantencion' },
-          });
-        }
-      }
     }
 
     await this.recordImportRows(
@@ -522,6 +578,38 @@ export class ImportsService {
         createdEntity: row.createdEntity,
       })),
       skipDuplicates: true,
+    });
+  }
+
+  private async resolvePlansRows(rows: PlanesWorkOrderRow[]) {
+    let assetResolved = 0;
+    let plantResolved = 0;
+
+    for (const row of rows) {
+      const asset = await this.resolvePlanAsset(row.equipmentNumber ?? row.equipment);
+      if (asset) {
+        assetResolved += 1;
+      }
+      if (asset?.plantId) {
+        plantResolved += 1;
+      }
+    }
+
+    return {
+      assetResolved,
+      plantResolved,
+      assetMissing: rows.length - assetResolved,
+      plantMissing: rows.length - plantResolved,
+    };
+  }
+
+  private async resolvePlanAsset(equipmentNumber?: string | null) {
+    if (!equipmentNumber) {
+      return null;
+    }
+    return this.prisma.assetKksNode.findFirst({
+      where: { equipmentCode: equipmentNumber },
+      select: { id: true, plantId: true },
     });
   }
 
@@ -741,8 +829,13 @@ export class ImportsService {
     return null;
   }
 
+  private parseOptionalDate(value?: string | null) {
+    return value ? new Date(value) : null;
+  }
+
   private mapStatus(status?: string | null): WorkOrderStatus {
     const normalized = status?.toLowerCase() ?? '';
+    if (status && status in WorkOrderStatus) return status as WorkOrderStatus;
     if (normalized.includes('complet') || normalized.includes('cerr')) return WorkOrderStatus.COMPLETED;
     if (normalized.includes('asign')) return WorkOrderStatus.ASSIGNED;
     if (normalized.includes('ejec')) return WorkOrderStatus.IN_PROGRESS;
@@ -751,7 +844,8 @@ export class ImportsService {
 
   private mapCriticality(value?: string | null): IssueSeverity {
     const normalized = value?.toLowerCase() ?? '';
-    if (normalized.includes('alta') || normalized.includes('critical')) return IssueSeverity.CRITICAL;
+    if (value && value in IssueSeverity) return value as IssueSeverity;
+    if (normalized.includes('alta') || normalized.includes('critic') || normalized.includes('crític')) return IssueSeverity.CRITICAL;
     if (normalized.includes('media') || normalized.includes('warning')) return IssueSeverity.WARNING;
     return IssueSeverity.INFO;
   }

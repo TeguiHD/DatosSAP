@@ -53,3 +53,9 @@ def test_planes_counts_real_excel() -> None:
     assert result.metadata["work_orders"] == 12
     assert result.metadata["planned_hours"] == 432
     assert result.metadata["actual_hours"] == 178
+    assert result.metadata["statuses"] == {
+        "COMPLETED": 2,
+        "IN_PROGRESS": 10,
+    }
+    assert result.metadata["criticalities"] == {"CRITICAL": 12}
+    assert result.errors == 0

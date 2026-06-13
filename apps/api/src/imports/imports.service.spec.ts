@@ -50,6 +50,10 @@ type ResolveKksPlant = (
   cache?: Map<string, { id: string; code: string } | null>,
 ) => Promise<{ id: string; code: string } | null>;
 
+type ResolvePlanAsset = (
+  equipmentNumber?: string | null,
+) => Promise<{ id: string; plantId: string | null } | null>;
+
 function createService(overrides: Record<string, unknown>) {
   return new ImportsService(
     overrides as unknown as PrismaService,
@@ -195,5 +199,24 @@ describe('ImportsService KKS plant resolution', () => {
     expect(result).toBeNull();
     expect(findUnique).not.toHaveBeenCalled();
     expect(findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImportsService Planes contract', () => {
+  it('resolves work order asset only by equipment number', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: 'asset-1', plantId: 'plant-1' });
+    const service = createService({
+      assetKksNode: { findFirst },
+    });
+    const resolvePlanAsset = Reflect.get(service, 'resolvePlanAsset') as ResolvePlanAsset;
+
+    const result = await resolvePlanAsset.call(service, '1000069629');
+
+    expect(result).toEqual({ id: 'asset-1', plantId: 'plant-1' });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { equipmentCode: '1000069629' },
+      select: { id: true, plantId: true },
+    });
+    expect(JSON.stringify(findFirst.mock.calls)).not.toContain('"kks"');
   });
 });
