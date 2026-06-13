@@ -86,7 +86,7 @@ describe('ImportsService Posiciones contract', () => {
         findUnique: vi.fn().mockResolvedValue(null),
       },
       plantAlias: {
-        findUnique: vi.fn().mockResolvedValue({
+        findFirst: vi.fn().mockResolvedValue({
           plantId: 'plant-cemin',
         }),
       },

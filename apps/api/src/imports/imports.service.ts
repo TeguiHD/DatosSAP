@@ -530,9 +530,10 @@ export class ImportsService {
     if (mapping?.targetPlant) {
       return mapping.targetPlant;
     }
-    const alias = await this.prisma.plantAlias.findUnique({
-      where: { aliasCode_source: { aliasCode: sourceCode, source: 'import' } },
+    const alias = await this.prisma.plantAlias.findFirst({
+      where: { aliasCode: sourceCode },
       include: { plant: { include: { client: true } } },
+      orderBy: { createdAt: 'desc' },
     });
     if (alias?.plant) {
       return alias.plant;
@@ -661,13 +662,8 @@ export class ImportsService {
           },
         },
       }),
-      this.prisma.plantAlias.findUnique({
-        where: {
-          aliasCode_source: {
-            aliasCode: 'ESZS-A1',
-            source: 'import',
-          },
-        },
+      this.prisma.plantAlias.findFirst({
+        where: { aliasCode: 'ESZS-A1' },
       }),
     ]);
     if (!mapping?.targetPlantId && !alias?.plantId) {
