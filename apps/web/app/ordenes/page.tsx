@@ -1,5 +1,6 @@
 import { WorkOrdersView } from '@/components/work-orders-view';
-import { apiGet, type WorkOrderRow } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type WorkOrderRow } from '@/lib/api';
 
 export default async function WorkOrdersPage() {
   const workOrders = await apiGet<WorkOrderRow[]>('/work-orders');

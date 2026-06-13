@@ -2,7 +2,7 @@ import { EmptyState } from '@/components/empty-state';
 import { PageHeader } from '@/components/shell/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { apiGet } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
 
 interface PermissionsResponse {
   roles: string[];

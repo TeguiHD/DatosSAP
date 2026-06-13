@@ -2,7 +2,8 @@ import { EmptyState } from '@/components/empty-state';
 import { PageHeader } from '@/components/shell/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { apiGet, type PlantRow } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type PlantRow } from '@/lib/api';
 
 export default async function RecertificationsPage() {
   const plants = await apiGet<PlantRow[]>('/plants');

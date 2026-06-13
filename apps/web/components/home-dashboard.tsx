@@ -8,7 +8,8 @@ import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EmptyState } from '@/components/empty-state';
-import { apiGet, type KpiSummary, type PlantRow, type WorkOrderRow } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type KpiSummary, type PlantRow, type WorkOrderRow } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
 
 const quickActions = [

@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { apiGet, type OccurrenceRow } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type OccurrenceRow } from '@/lib/api';
 
 export default async function PlanningPage() {
   const occurrences = await apiGet<OccurrenceRow[]>('/planning/list');

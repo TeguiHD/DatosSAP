@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { apiGet, type KksNodeRow } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type KksNodeRow } from '@/lib/api';
 
 export default async function AssetsPage() {
   const nodes = await apiGet<KksNodeRow[]>('/kks/tree');

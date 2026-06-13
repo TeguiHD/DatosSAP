@@ -5,7 +5,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { apiGet, type ExecutiveReport, type KpiSummary } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type ExecutiveReport, type KpiSummary } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
 
 export default async function AnalysisPage() {

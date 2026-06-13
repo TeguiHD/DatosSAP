@@ -3,7 +3,7 @@ import { PageHeader } from '@/components/shell/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { apiGet } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
 
 interface AuditEvent {
   id: string;

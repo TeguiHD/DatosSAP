@@ -84,18 +84,9 @@ export interface ExecutiveReport {
 export type { KpiSummary };
 
 export function apiUrl(path: string) {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
-  return new URL(`/api${path}`, base).toString();
+  return `/api/backend${normalizePath(path)}`;
 }
 
-export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
-  try {
-    const response = await fetch(apiUrl(path), { cache: 'no-store' });
-    if (!response.ok) {
-      return { data: null, error: `${response.status} ${response.statusText}` };
-    }
-    return { data: (await response.json()) as T, error: null };
-  } catch (error) {
-    return { data: null, error: error instanceof Error ? error.message : 'API no disponible' };
-  }
+function normalizePath(path: string) {
+  return path.startsWith('/') ? path : `/${path}`;
 }

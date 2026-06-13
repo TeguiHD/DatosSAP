@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { apiGet, type AssignmentWeek } from '@/lib/api';
+import { apiGet } from '@/lib/api-server';
+import { type AssignmentWeek } from '@/lib/api';
 
 export default async function AssignmentsPage() {
   const week = await apiGet<AssignmentWeek>('/assignments/week');

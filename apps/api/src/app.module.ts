@@ -1,7 +1,11 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
+import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
+import { RbacGuard } from './auth/guards/rbac.guard';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { HealthModule } from './health/health.module';
 import { ImportsModule } from './imports/imports.module';
@@ -23,6 +27,7 @@ import { WorkOrdersModule } from './work-orders/work-orders.module';
       },
     ]),
     PrismaModule,
+    AuthModule,
     HealthModule,
     DashboardModule,
     PlantsModule,
@@ -35,6 +40,16 @@ import { WorkOrdersModule } from './work-orders/work-orders.module';
     AuditModule,
     NotificationsModule,
     RbacModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RbacGuard,
+    },
   ],
 })
 export class AppModule {}

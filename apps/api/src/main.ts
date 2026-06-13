@@ -10,12 +10,12 @@ async function bootstrap() {
     bufferLogs: true,
   });
 
-  const webOrigin = process.env.NEXTAUTH_URL ?? 'http://localhost:3000';
+  const webOrigin = process.env.NEXTAUTH_URL ?? 'http://localhost:3100';
   const extraOrigins = (process.env.CORS_ORIGINS ?? '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  const allowedOrigins = new Set([webOrigin, 'http://localhost:3000', ...extraOrigins]);
+  const allowedOrigins = new Set([webOrigin, 'http://localhost:3000', 'http://localhost:3100', ...extraOrigins]);
 
   app.use(
     helmet({
@@ -50,10 +50,9 @@ async function bootstrap() {
     }),
   );
   app.enableShutdownHooks();
-  app.setGlobalPrefix('api');
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port, '0.0.0.0');
-  logger.log(`API listening on http://0.0.0.0:${port}/api`);
+  logger.log(`API listening on http://0.0.0.0:${port}`);
 }
 
 void bootstrap();

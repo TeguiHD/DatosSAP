@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
+import type { Role } from '@datos/shared';
 import { BellRing, MoreHorizontal, Search } from 'lucide-react';
 import { desktopPrimaryNav, primaryNav, secondaryNav, type NavItem } from '@/lib/domain-data';
 import { cn } from '@/lib/utils';
@@ -17,10 +18,21 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 
-const moreItems = secondaryNav.flatMap((section) => section.items);
-
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, role }: { children: ReactNode; role: Role | null }) {
   const pathname = usePathname();
+  if (pathname.startsWith('/login')) {
+    return <>{children}</>;
+  }
+
+  const visibleDesktopPrimaryNav = desktopPrimaryNav.filter((item) => canSeeItem(item, role));
+  const visiblePrimaryNav = primaryNav.filter((item) => canSeeItem(item, role));
+  const visibleSecondaryNav = secondaryNav
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => canSeeItem(item, role)),
+    }))
+    .filter((section) => section.items.length > 0);
+  const moreItems = visibleSecondaryNav.flatMap((section) => section.items);
   const moreActive = moreItems.some((item) => isActive(pathname, item.href));
 
   return (
@@ -43,7 +55,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <nav aria-label="Navegacion principal" className="hidden min-w-0 flex-1 justify-center lg:flex">
             <div className="flex min-w-0 items-center gap-1 rounded-md border bg-card p-1 shadow-sm">
-              {desktopPrimaryNav.map((item) => (
+              {visibleDesktopPrimaryNav.map((item) => (
                 <TopNavLink key={item.href} item={item} pathname={pathname} />
               ))}
             </div>
@@ -57,7 +69,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button variant="outline" size="icon" aria-label="Ver alertas criticas">
               <BellRing aria-hidden="true" />
             </Button>
-            <MoreMenu pathname={pathname} triggerLabel="Mas" />
+            <MoreMenu pathname={pathname} triggerLabel="Mas" sections={visibleSecondaryNav} />
           </div>
         </div>
       </header>
@@ -70,10 +82,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         aria-label="Navegacion diaria"
         className="fixed inset-x-0 bottom-0 z-50 grid grid-cols-5 border-t bg-card/96 px-2 py-2 backdrop-blur lg:hidden"
       >
-        {primaryNav.map((item) => (
+        {visiblePrimaryNav.map((item) => (
           <BottomNavLink key={item.href} item={item} pathname={pathname} />
         ))}
-        <MoreMenu pathname={pathname} compact active={moreActive} triggerLabel="Mas" />
+        <MoreMenu pathname={pathname} compact active={moreActive} triggerLabel="Mas" sections={visibleSecondaryNav} />
       </nav>
     </div>
   );
@@ -120,11 +132,13 @@ function MoreMenu({
   compact = false,
   active = false,
   triggerLabel,
+  sections,
 }: {
   pathname: string;
   compact?: boolean;
   active?: boolean;
   triggerLabel: string;
+  sections: { label: string; items: NavItem[] }[];
 }) {
   return (
     <Sheet>
@@ -153,7 +167,7 @@ function MoreMenu({
           <SheetDescription>Accesos secundarios agrupados para no saturar la operacion diaria.</SheetDescription>
         </SheetHeader>
         <div className="mt-6 flex flex-col gap-6">
-          {secondaryNav.map((section) => (
+          {sections.map((section) => (
             <section key={section.label} className="flex flex-col gap-2">
               <h2 className="px-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 {section.label}
@@ -194,4 +208,12 @@ function isActive(pathname: string, href: string) {
   }
 
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function canSeeItem(item: NavItem, role: Role | null) {
+  if (!item.roles?.length) {
+    return true;
+  }
+
+  return Boolean(role && item.roles.includes(role));
 }

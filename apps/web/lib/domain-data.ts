@@ -14,11 +14,13 @@ import {
   UsersRound,
   type LucideIcon,
 } from 'lucide-react';
+import type { Role } from '@datos/shared';
 
 export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  roles?: Role[];
 }
 
 export const primaryNav: NavItem[] = [
@@ -31,7 +33,7 @@ export const primaryNav: NavItem[] = [
 export const desktopPrimaryNav: NavItem[] = [
   ...primaryNav,
   { href: '/activos', label: 'Activos', icon: Network },
-  { href: '/importacion', label: 'Importacion', icon: FileUp },
+  { href: '/importacion', label: 'Importacion', icon: FileUp, roles: ['SUPERADMIN', 'ADMIN'] },
 ];
 
 export const secondaryNav: { label: string; items: NavItem[] }[] = [
@@ -39,8 +41,8 @@ export const secondaryNav: { label: string; items: NavItem[] }[] = [
     label: 'Gestion tecnica',
     items: [
       { href: '/activos', label: 'Activos/KKS', icon: Network },
-      { href: '/asignaciones', label: 'Asignaciones', icon: UsersRound },
-      { href: '/importacion', label: 'Importacion', icon: FileUp },
+      { href: '/asignaciones', label: 'Asignaciones', icon: UsersRound, roles: ['SUPERADMIN', 'ADMIN', 'SUPERVISOR'] },
+      { href: '/importacion', label: 'Importacion', icon: FileUp, roles: ['SUPERADMIN', 'ADMIN'] },
     ],
   },
   {
@@ -54,9 +56,9 @@ export const secondaryNav: { label: string; items: NavItem[] }[] = [
   {
     label: 'Administracion',
     items: [
-      { href: '/usuarios', label: 'Usuarios', icon: ShieldCheck },
-      { href: '/auditoria', label: 'Auditoria', icon: DatabaseZap },
-      { href: '/configuracion', label: 'Configuracion', icon: Bell },
+      { href: '/usuarios', label: 'Usuarios', icon: ShieldCheck, roles: ['SUPERADMIN', 'ADMIN'] },
+      { href: '/auditoria', label: 'Auditoria', icon: DatabaseZap, roles: ['SUPERADMIN', 'ADMIN'] },
+      { href: '/configuracion', label: 'Configuracion', icon: Bell, roles: ['SUPERADMIN', 'ADMIN'] },
     ],
   },
 ];
