@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { desktopPrimaryNav, primaryNav, secondaryNav } from './domain-data';
+import { navSections, primaryNav } from './domain-data';
 
 describe('new product contract', () => {
   it('keeps mobile daily navigation reduced', () => {
@@ -12,11 +12,9 @@ describe('new product contract', () => {
   });
 
   it('keeps user-facing routes in Spanish', () => {
-    const routes = [
-      ...desktopPrimaryNav.map((item) => item.href),
-      ...secondaryNav.flatMap((section) => section.items.map((item) => item.href)),
-    ];
+    const routes = navSections.flatMap((section) => section.items.map((item) => item.href));
 
+    expect(routes).toContain('/inicio');
     expect(routes).toContain('/plantas');
     expect(routes).toContain('/planificacion');
     expect(routes).toContain('/ordenes');

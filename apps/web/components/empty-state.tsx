@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight, DatabaseZap } from 'lucide-react';
+import { ArrowRight, DatabaseZap, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -8,17 +8,19 @@ export function EmptyState({
   description,
   actionHref = '/importacion',
   actionLabel = 'Importar datos',
+  icon: Icon = DatabaseZap,
 }: {
   title: string;
   description: string;
   actionHref?: string;
   actionLabel?: string;
+  icon?: LucideIcon;
 }) {
   return (
     <Card>
       <CardHeader>
         <div className="mb-2 flex size-10 items-center justify-center rounded-md bg-muted">
-          <DatabaseZap aria-hidden="true" />
+          <Icon aria-hidden="true" />
         </div>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>

@@ -11,11 +11,15 @@ export type Role = (typeof ROLES)[number];
 export const WORK_ORDER_STATUSES = [
   'DRAFT',
   'SCHEDULED',
+  'CLIENT_NOTIFIED',
+  'PENDING_ACCESS',
+  'PENDING_EXECUTION_APPROVAL',
   'ASSIGNED',
   'IN_PROGRESS',
   'PENDING_EVIDENCE',
   'PENDING_SUPERVISOR_REVIEW',
   'PENDING_CLIENT_APPROVAL',
+  'PENDING_CONFORMITY',
   'COMPLETED',
   'CLOSED',
   'SIGNED',
@@ -27,6 +31,20 @@ export const WORK_ORDER_STATUSES = [
 ] as const;
 
 export type WorkOrderStatus = (typeof WORK_ORDER_STATUSES)[number];
+
+export const VISIT_PLAN_STATUSES = ['SCHEDULED', 'EN_ROUTE', 'ON_SITE', 'COMPLETED', 'CANCELLED'] as const;
+export type VisitPlanStatus = (typeof VISIT_PLAN_STATUSES)[number];
+
+export const VISIT_ACCESS_STATUSES = ['PENDING', 'REQUESTED', 'APPROVED', 'REJECTED'] as const;
+export type VisitAccessStatus = (typeof VISIT_ACCESS_STATUSES)[number];
+
+export const CLIENT_APPROVAL_TYPES = [
+  'NOTIFICATION_ONLY',
+  'ACCESS_REQUIRED',
+  'EXECUTION_APPROVAL',
+  'CONFORMITY_REQUIRED',
+] as const;
+export type ClientApprovalType = (typeof CLIENT_APPROVAL_TYPES)[number];
 
 export const IMPORT_FILE_TYPES = ['KKS_FIORI', 'POSICIONES_ESSC_SUR', 'PLANES_MANTENCION'] as const;
 export type ImportFileType = (typeof IMPORT_FILE_TYPES)[number];

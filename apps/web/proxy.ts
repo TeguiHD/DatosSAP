@@ -6,9 +6,13 @@ const viewerBlockedPrefixes = ['/dashboard/importacion', '/importacion'];
 export default auth((request) => {
   const { pathname } = request.nextUrl;
 
+  if (isRedirectOnlyPath(pathname)) {
+    return NextResponse.next();
+  }
+
   if (isPublicPath(pathname)) {
     if (pathname === '/login' && request.auth) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
+      return NextResponse.redirect(new URL('/inicio', request.url));
     }
     return NextResponse.next();
   }
@@ -33,4 +37,8 @@ export const config = {
 
 function isPublicPath(pathname: string) {
   return pathname === '/login' || pathname.startsWith('/api/');
+}
+
+function isRedirectOnlyPath(pathname: string) {
+  return pathname === '/' || pathname === '/dashboard';
 }

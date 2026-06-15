@@ -49,11 +49,15 @@ enum OccurrenceStatus {
 enum WorkOrderStatus {
   DRAFT
   SCHEDULED
+  CLIENT_NOTIFIED
+  PENDING_ACCESS
+  PENDING_EXECUTION_APPROVAL
   ASSIGNED
   IN_PROGRESS
   PENDING_EVIDENCE
   PENDING_SUPERVISOR_REVIEW
   PENDING_CLIENT_APPROVAL
+  PENDING_CONFORMITY
   COMPLETED
   CLOSED
   SIGNED
@@ -94,6 +98,28 @@ enum ImportJobStatus {
   FAILED
 }
 
+enum VisitPlanStatus {
+  SCHEDULED
+  EN_ROUTE
+  ON_SITE
+  COMPLETED
+  CANCELLED
+}
+
+enum VisitAccessStatus {
+  PENDING
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
+enum ClientApprovalType {
+  NOTIFICATION_ONLY
+  ACCESS_REQUIRED
+  EXECUTION_APPROVAL
+  CONFORMITY_REQUIRED
+}
+
 enum IssueSeverity {
   INFO
   WARNING
@@ -119,49 +145,49 @@ model Organization {
 }
 
 model User {
-  id                     String                  @id @default(cuid())
-  organizationId         String?
-  organization           Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  email                  String                  @unique
-  name                   String?
-  passwordHash           String
-  role                   Role                    @default(TECNICO)
-  failedLoginAttempts    Int                     @default(0)
-  lockedUntil            DateTime?
-  lastLoginAt            DateTime?
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
-  sessions               UserSession[]
-  plantScopes            UserPlantScope[]
-  auditEvents            AuditEvent[]
-  importJobs             ImportJob[]
-  createdWorkOrders      WorkOrder[]             @relation("WorkOrderCreatedBy")
-  assignedWorkOrders     WorkOrder[]             @relation("WorkOrderAssignedUser")
-  assignments            Assignment[]
-  hhEntries              HhEntry[]
-  evidenceFiles          EvidenceFile[]
-  clientApprovals        ClientApproval[]        @relation("ApprovalRespondedBy")
-  workOrderComments      WorkOrderComment[]
-  workOrderStatusHistory WorkOrderStatusHistory[]
-  signedReports          SignedReport[]
+  id                       String                    @id @default(cuid())
+  organizationId           String?
+  organization             Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  email                    String                    @unique
+  name                     String?
+  passwordHash             String
+  role                     Role                      @default(TECNICO)
+  failedLoginAttempts      Int                       @default(0)
+  lockedUntil              DateTime?
+  lastLoginAt              DateTime?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  sessions                 UserSession[]
+  plantScopes              UserPlantScope[]
+  auditEvents              AuditEvent[]
+  importJobs               ImportJob[]
+  createdWorkOrders        WorkOrder[]               @relation("WorkOrderCreatedBy")
+  assignedWorkOrders       WorkOrder[]               @relation("WorkOrderAssignedUser")
+  assignments              Assignment[]
+  hhEntries                HhEntry[]
+  evidenceFiles            EvidenceFile[]
+  clientApprovals          ClientApproval[]          @relation("ApprovalRespondedBy")
+  workOrderComments        WorkOrderComment[]
+  workOrderStatusHistory   WorkOrderStatusHistory[]
+  signedReports            SignedReport[]
   recertificationDocuments RecertificationDocument[]
-  notificationPreference NotificationPreference?
-  pushSubscriptions      PushSubscription[]
+  notificationPreference   NotificationPreference?
+  pushSubscriptions        PushSubscription[]
 
   @@index([organizationId])
   @@index([role])
 }
 
 model UserSession {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshHash  String   @unique
-  userAgent    String?
-  ip           String?
-  expiresAt    DateTime
-  revokedAt    DateTime?
-  createdAt    DateTime @default(now())
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash String    @unique
+  userAgent   String?
+  ip          String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
 
   @@index([userId])
   @@index([expiresAt])
@@ -169,44 +195,45 @@ model UserSession {
 }
 
 model Client {
-  id        String   @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  name      String   @unique
-  taxId     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  plants    Plant[]
+  name           String        @unique
+  taxId          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  plants         Plant[]
 
   @@index([organizationId])
 }
 
 model Plant {
-  id                String                  @id @default(cuid())
-  code              String                  @unique
-  name              String
-  clientId          String
-  client            Client                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  status            PlantStatus             @default(ACTIVE)
-  latitude          Float?
-  longitude         Float?
-  commissionedAt    DateTime?               @db.Date
-  centerCode        String?                 @db.VarChar(10)
-  healthScore       Int?
-  createdAt         DateTime                @default(now())
-  updatedAt         DateTime                @updatedAt
-  aliases           PlantAlias[]
-  userScopes        UserPlantScope[]
-  assetNodes        AssetKksNode[]
-  templates         MaintenanceTemplate[]
-  occurrences       MaintenanceOccurrence[]
-  workOrders        WorkOrder[]
-  kpiSummaries      KpiDailySummary[]
-  recertifications  PlantRecertification[]
-  importMappings    ImportMapping[]
-  notificationEvents NotificationEvent[]
+  id                    String                  @id @default(cuid())
+  code                  String                  @unique
+  name                  String
+  clientId              String
+  client                Client                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  status                PlantStatus             @default(ACTIVE)
+  latitude              Float?
+  longitude             Float?
+  commissionedAt        DateTime?               @db.Date
+  centerCode            String?                 @db.VarChar(10)
+  healthScore           Int?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  aliases               PlantAlias[]
+  userScopes            UserPlantScope[]
+  assetNodes            AssetKksNode[]
+  templates             MaintenanceTemplate[]
+  occurrences           MaintenanceOccurrence[]
+  workOrders            WorkOrder[]
+  visitPlans            VisitPlan[]
+  kpiSummaries          KpiDailySummary[]
+  recertifications      PlantRecertification[]
+  importMappings        ImportMapping[]
+  notificationEvents    NotificationEvent[]
   recertificationCycles RecertificationCycle[]
-  kpiMeasures       KpiDailyMeasure[]
+  kpiMeasures           KpiDailyMeasure[]
 
   @@index([clientId])
   @@index([status, healthScore])
@@ -238,11 +265,11 @@ model UserPlantScope {
 }
 
 model WorkCenter {
-  id          String         @id @default(cuid())
-  code        String         @unique
-  name        String
-  assetNodes  AssetKksNode[]
-  personnel   Personnel[]
+  id         String         @id @default(cuid())
+  code       String         @unique
+  name       String
+  assetNodes AssetKksNode[]
+  personnel  Personnel[]
 }
 
 model CostCenter {
@@ -253,40 +280,41 @@ model CostCenter {
 }
 
 model Specialty {
-  id        String      @id @default(cuid())
-  code      String      @unique
-  name      String
-  personnel Personnel[]
-  templates MaintenanceTemplate[]
+  id               String                @id @default(cuid())
+  code             String                @unique
+  name             String
+  personnel        Personnel[]
+  templates        MaintenanceTemplate[]
   milestoneConfigs MilestoneConfig[]
 }
 
 model Personnel {
-  id                 String       @id @default(cuid())
-  name               String
-  email              String?
-  phone              String?
-  isExternal         Boolean      @default(false)
-  weeklyCapacityHours Float       @default(45)
-  primarySpecialtyId String?
-  primarySpecialty   Specialty?   @relation(fields: [primarySpecialtyId], references: [id], onDelete: SetNull)
-  workCenterId       String?
-  workCenter         WorkCenter?  @relation(fields: [workCenterId], references: [id], onDelete: SetNull)
-  assignments        Assignment[]
+  id                    String       @id @default(cuid())
+  name                  String
+  email                 String?
+  phone                 String?
+  isExternal            Boolean      @default(false)
+  weeklyCapacityHours   Float        @default(45)
+  primarySpecialtyId    String?
+  primarySpecialty      Specialty?   @relation(fields: [primarySpecialtyId], references: [id], onDelete: SetNull)
+  workCenterId          String?
+  workCenter            WorkCenter?  @relation(fields: [workCenterId], references: [id], onDelete: SetNull)
+  assignments           Assignment[]
+  responsibleVisitPlans VisitPlan[]  @relation("VisitPlanResponsible")
 
   @@index([primarySpecialtyId])
   @@index([workCenterId])
 }
 
 model AssetKksNode {
-  id                   String                 @id @default(cuid())
+  id                   String                  @id @default(cuid())
   plantId              String?
-  plant                Plant?                 @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  plant                Plant?                  @relation(fields: [plantId], references: [id], onDelete: SetNull)
   parentId             String?
-  parent               AssetKksNode?          @relation("KksTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children             AssetKksNode[]         @relation("KksTree")
+  parent               AssetKksNode?           @relation("KksTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children             AssetKksNode[]          @relation("KksTree")
   nodeType             AssetNodeType
-  technicalObject      String                 @unique
+  technicalObject      String                  @unique
   superiorObject       String?
   kks                  String?
   kksDescription       String?
@@ -297,13 +325,13 @@ model AssetKksNode {
   systemStatus         String?
   center               String?
   workCenterId         String?
-  workCenter           WorkCenter?            @relation(fields: [workCenterId], references: [id], onDelete: SetNull)
+  workCenter           WorkCenter?             @relation(fields: [workCenterId], references: [id], onDelete: SetNull)
   costCenterId         String?
-  costCenter           CostCenter?            @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
+  costCenter           CostCenter?             @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
   raw                  Json
   sourceHash           String
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
   templates            MaintenanceTemplate[]
   occurrences          MaintenanceOccurrence[]
   workOrders           WorkOrder[]
@@ -316,36 +344,37 @@ model AssetKksNode {
 }
 
 model MaintenanceFrequency {
-  id             String                 @id @default(cuid())
-  code           FrequencyCode          @unique
+  id             String                @id @default(cuid())
+  code           FrequencyCode         @unique
   label          String
   monthsInterval Int?
   templates      MaintenanceTemplate[]
 }
 
 model MaintenanceTemplate {
-  id                 String                  @id @default(cuid())
-  plantId            String
-  plant              Plant                   @relation(fields: [plantId], references: [id], onDelete: Cascade)
-  assetNodeId        String?
-  assetNode          AssetKksNode?           @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
-  frequencyId        String
-  frequency          MaintenanceFrequency    @relation(fields: [frequencyId], references: [id], onDelete: Restrict)
+  id                  String                  @id @default(cuid())
+  plantId             String
+  plant               Plant                   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  assetNodeId         String?
+  assetNode           AssetKksNode?           @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
+  frequencyId         String
+  frequency           MaintenanceFrequency    @relation(fields: [frequencyId], references: [id], onDelete: Restrict)
   requiredSpecialtyId String?
-  requiredSpecialty  Specialty?              @relation(fields: [requiredSpecialtyId], references: [id], onDelete: SetNull)
-  sourcePosition     String?
-  planName           String
-  routeSheet         String?
-  activityName       String
-  wbsElement         String?
-  startMonth         Int?
-  estimatedHours     Float?
-  requiresEvidence   Boolean                 @default(true)
-  idempotencyHash    String                  @unique
-  sourceHash         String                  @unique
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  occurrences        MaintenanceOccurrence[]
+  requiredSpecialty   Specialty?              @relation(fields: [requiredSpecialtyId], references: [id], onDelete: SetNull)
+  sourcePosition      String?
+  planName            String
+  routeSheet          String?
+  activityName        String
+  wbsElement          String?
+  startMonth          Int?
+  estimatedHours      Float?
+  requiresEvidence    Boolean                 @default(true)
+  clientApprovalType  ClientApprovalType      @default(NOTIFICATION_ONLY)
+  idempotencyHash     String                  @unique
+  sourceHash          String                  @unique
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  occurrences         MaintenanceOccurrence[]
 
   @@index([plantId])
   @@index([assetNodeId])
@@ -353,82 +382,110 @@ model MaintenanceTemplate {
 }
 
 model MaintenanceOccurrence {
-  id             String             @id @default(cuid())
+  id             String              @id @default(cuid())
   templateId     String
   template       MaintenanceTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   plantId        String
-  plant          Plant              @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  plant          Plant               @relation(fields: [plantId], references: [id], onDelete: Cascade)
   assetNodeId    String?
-  assetNode      AssetKksNode?      @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
-  scheduledFor   DateTime           @db.Date
-  dueDate        DateTime           @db.Date
-  isHistorical   Boolean            @default(false)
-  status         OccurrenceStatus   @default(SCHEDULED)
+  assetNode      AssetKksNode?       @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
+  scheduledFor   DateTime            @db.Date
+  dueDate        DateTime            @db.Date
+  isHistorical   Boolean             @default(false)
+  status         OccurrenceStatus    @default(SCHEDULED)
   sourceMonthKey String
-  sourceHash     String             @unique
+  sourceHash     String              @unique
   workOrder      WorkOrder?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
 
+  @@unique([templateId, scheduledFor])
   @@index([plantId, scheduledFor])
   @@index([status, scheduledFor])
   @@index([assetNodeId])
-  @@unique([templateId, scheduledFor])
 }
 
 model WorkOrder {
-  id               String                 @id @default(cuid())
-  code             String                 @unique
-  plantId          String
-  plant            Plant                  @relation(fields: [plantId], references: [id], onDelete: Cascade)
-  assetNodeId      String?
-  assetNode        AssetKksNode?          @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
-  occurrenceId     String?                @unique
-  occurrence       MaintenanceOccurrence? @relation(fields: [occurrenceId], references: [id], onDelete: SetNull)
-  title            String
-  description      String?
-  status           WorkOrderStatus        @default(DRAFT)
-  criticality      IssueSeverity          @default(INFO)
-  plannedStart     DateTime?
-  plannedEnd       DateTime?
-  plannedHours     Float?
-  actualHours      Float?
+  id                String                   @id @default(cuid())
+  code              String                   @unique
+  plantId           String
+  plant             Plant                    @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  assetNodeId       String?
+  assetNode         AssetKksNode?            @relation(fields: [assetNodeId], references: [id], onDelete: SetNull)
+  occurrenceId      String?                  @unique
+  occurrence        MaintenanceOccurrence?   @relation(fields: [occurrenceId], references: [id], onDelete: SetNull)
+  visitPlanId       String?
+  visitPlan         VisitPlan?               @relation(fields: [visitPlanId], references: [id], onDelete: SetNull)
+  title             String
+  description       String?
+  status            WorkOrderStatus          @default(DRAFT)
+  criticality       IssueSeverity            @default(INFO)
+  plannedStart      DateTime?
+  plannedEnd        DateTime?
+  plannedHours      Float?
+  actualHours       Float?
   requiredSpecialty String?
-  importedProgress Float?
-  progress         Float                  @default(0)
-  metadata         Json?
-  createdById      String?
-  createdBy        User?                  @relation("WorkOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  assignedUserId   String?
-  assignedUser     User?                  @relation("WorkOrderAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
-  milestones       WorkOrderMilestone[]
-  assignments      Assignment[]
-  hhEntries        HhEntry[]
-  evidenceFiles    EvidenceFile[]
-  clientApprovals  ClientApproval[]
-  statusHistory    WorkOrderStatusHistory[]
-  comments         WorkOrderComment[]
-  signedReports    SignedReport[]
+  importedProgress  Float?
+  progress          Float                    @default(0)
+  metadata          Json?
+  createdById       String?
+  createdBy         User?                    @relation("WorkOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedUserId    String?
+  assignedUser      User?                    @relation("WorkOrderAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  milestones        WorkOrderMilestone[]
+  assignments       Assignment[]
+  hhEntries         HhEntry[]
+  evidenceFiles     EvidenceFile[]
+  clientApprovals   ClientApproval[]
+  statusHistory     WorkOrderStatusHistory[]
+  comments          WorkOrderComment[]
+  signedReports     SignedReport[]
 
   @@index([plantId, status])
   @@index([status, plannedStart])
   @@index([assetNodeId])
   @@index([assignedUserId])
+  @@index([visitPlanId])
+}
+
+model VisitPlan {
+  id                     String            @id @default(cuid())
+  plantId                String
+  plant                  Plant             @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  scheduledFor           DateTime          @db.Date
+  responsiblePersonnelId String?
+  responsiblePersonnel   Personnel?        @relation("VisitPlanResponsible", fields: [responsiblePersonnelId], references: [id], onDelete: SetNull)
+  crewMemberIds          String[]          @default([])
+  equipmentItems         String[]          @default([])
+  requiredPermits        String[]          @default([])
+  clientContact          String?
+  accessStatus           VisitAccessStatus @default(PENDING)
+  status                 VisitPlanStatus   @default(SCHEDULED)
+  notes                  String?
+  generalEvidenceUrl     String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  workOrders             WorkOrder[]
+
+  @@index([plantId, scheduledFor])
+  @@index([responsiblePersonnelId, scheduledFor])
+  @@index([status, scheduledFor])
+  @@index([accessStatus, scheduledFor])
 }
 
 model WorkOrderMilestone {
-  id          String          @id @default(cuid())
+  id          String           @id @default(cuid())
   workOrderId String
-  workOrder   WorkOrder       @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrder   WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
   configId    String?
   config      MilestoneConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
   label       String
   weight      Float
-  status      MilestoneStatus @default(PENDING)
+  status      MilestoneStatus  @default(PENDING)
   completedAt DateTime?
-  createdAt   DateTime        @default(now())
+  createdAt   DateTime         @default(now())
 
   @@index([workOrderId, status])
   @@index([configId])
@@ -518,63 +575,63 @@ model HhEntry {
 }
 
 model EvidenceFile {
-  id          String    @id @default(cuid())
-  workOrderId String
-  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  workOrderId  String
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
   uploadedById String?
-  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
-  storageKey  String    @unique
-  fileName    String
-  mimeType    String
-  sizeBytes   Int
-  checksum    String
-  isRequired  Boolean   @default(false)
-  createdAt   DateTime  @default(now())
+  uploadedBy   User?     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  storageKey   String    @unique
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  checksum     String
+  isRequired   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
 
   @@index([workOrderId])
   @@index([uploadedById])
 }
 
 model SignedReport {
-  id            String    @id @default(cuid())
+  id            String     @id @default(cuid())
   workOrderId   String?
   workOrder     WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
   signedById    String?
-  signedBy      User?     @relation(fields: [signedById], references: [id], onDelete: SetNull)
-  reportNumber  String    @unique
-  storageKey    String    @unique
+  signedBy      User?      @relation(fields: [signedById], references: [id], onDelete: SetNull)
+  reportNumber  String     @unique
+  storageKey    String     @unique
   checksum      String
   signatureHash String
   signedAt      DateTime
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime   @default(now())
 
   @@index([workOrderId])
   @@index([signedById, signedAt])
 }
 
 model ClientApproval {
-  id             String    @id @default(cuid())
-  workOrderId    String
-  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-  requestedAt    DateTime  @default(now())
-  respondedAt    DateTime?
-  respondedById  String?
-  respondedBy    User?     @relation("ApprovalRespondedBy", fields: [respondedById], references: [id], onDelete: SetNull)
-  approved       Boolean?
-  comments       String?
+  id            String    @id @default(cuid())
+  workOrderId   String
+  workOrder     WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  requestedAt   DateTime  @default(now())
+  respondedAt   DateTime?
+  respondedById String?
+  respondedBy   User?     @relation("ApprovalRespondedBy", fields: [respondedById], references: [id], onDelete: SetNull)
+  approved      Boolean?
+  comments      String?
 
   @@index([workOrderId, respondedAt])
 }
 
 model PlantRecertification {
-  id             String   @id @default(cuid())
-  plantId        String
-  plant          Plant    @relation(fields: [plantId], references: [id], onDelete: Cascade)
-  label          String
-  dueDate        DateTime
-  completedAt    DateTime?
-  isIrregular    Boolean  @default(false)
-  source         String
+  id          String    @id @default(cuid())
+  plantId     String
+  plant       Plant     @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  label       String
+  dueDate     DateTime
+  completedAt DateTime?
+  isIrregular Boolean   @default(false)
+  source      String
 
   @@index([plantId, dueDate])
 }
@@ -616,16 +673,16 @@ model RecertificationDocument {
 }
 
 model ImportJob {
-  id          String          @id @default(cuid())
-  fileType    ImportFileType
-  status      ImportJobStatus @default(UPLOADED)
+  id           String          @id @default(cuid())
+  fileType     ImportFileType
+  status       ImportJobStatus @default(UPLOADED)
   uploadedById String?
-  uploadedBy   User?         @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedBy   User?           @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   originalName String
   storageKey   String?
   dryRun       Json?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
   files        ImportFile[]
   rows         ImportRow[]
   issues       ImportIssue[]
@@ -638,24 +695,24 @@ model ImportFile {
   id          String    @id @default(cuid())
   importJobId String
   importJob   ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
-  sheetName    String?
-  fileName     String
-  checksum     String
-  createdAt    DateTime @default(now())
+  sheetName   String?
+  fileName    String
+  checksum    String
+  createdAt   DateTime  @default(now())
 
   @@index([importJobId])
 }
 
 model ImportRow {
-  id          String    @id @default(cuid())
-  importJobId String
-  importJob   ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
-  sheetName    String
-  rowNumber    Int
-  rowHash      String
-  raw          Json
+  id            String    @id @default(cuid())
+  importJobId   String
+  importJob     ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  sheetName     String
+  rowNumber     Int
+  rowHash       String
+  raw           Json
   createdEntity String?
-  createdAt    DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   @@unique([importJobId, sheetName, rowNumber])
   @@index([rowHash])
@@ -677,34 +734,34 @@ model ImportIssue {
 }
 
 model ImportMapping {
-  id          String     @id @default(cuid())
-  importJobId String?
-  importJob   ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
-  sourceType  String
-  sourceValue String
+  id            String     @id @default(cuid())
+  importJobId   String?
+  importJob     ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
+  sourceType    String
+  sourceValue   String
   targetPlantId String?
-  targetPlant   Plant?    @relation(fields: [targetPlantId], references: [id], onDelete: SetNull)
-  notes       String?
-  createdAt   DateTime   @default(now())
+  targetPlant   Plant?     @relation(fields: [targetPlantId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime   @default(now())
 
   @@unique([sourceType, sourceValue])
   @@index([targetPlantId])
 }
 
 model AuditEvent {
-  id          String   @id @default(cuid())
-  actorUserId String?
-  actorUser   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
-  resource    String
-  resourceId  String
-  action      String
-  before      Json?
-  after       Json?
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  actorUser    User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  resource     String
+  resourceId   String
+  action       String
+  before       Json?
+  after        Json?
   previousHash String?
-  eventHash   String?
-  ip          String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  eventHash    String?
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
 
   @@index([resource, resourceId])
   @@index([actorUserId, createdAt])
@@ -713,12 +770,12 @@ model AuditEvent {
 }
 
 model IdempotencyKey {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  scope       String
-  response    Json?
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime
+  id        String   @id @default(cuid())
+  key       String   @unique
+  scope     String
+  response  Json?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
 
   @@index([expiresAt])
 }
@@ -740,15 +797,15 @@ model KpiDailySummary {
 }
 
 model KpiDailyMeasure {
-  id        String   @id @default(cuid())
-  plantId   String?
-  plant     Plant?   @relation(fields: [plantId], references: [id], onDelete: Cascade)
-  day       DateTime
-  metric    String
-  value     Float
-  unit      String?
+  id         String   @id @default(cuid())
+  plantId    String?
+  plant      Plant?   @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  day        DateTime
+  metric     String
+  value      Float
+  unit       String?
   dimensions Json?
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 
   @@unique([plantId, day, metric])
   @@index([day, metric])
@@ -766,30 +823,30 @@ model ReportRun {
 }
 
 model NotificationEvent {
-  id          String               @id @default(cuid())
-  plantId     String?
-  plant       Plant?               @relation(fields: [plantId], references: [id], onDelete: SetNull)
-  severity    NotificationSeverity
-  type        String
-  title       String
-  body        String
-  payload     Json
+  id           String               @id @default(cuid())
+  plantId      String?
+  plant        Plant?               @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  severity     NotificationSeverity
+  type         String
+  title        String
+  body         String
+  payload      Json
   dispatchedAt DateTime?
-  createdAt   DateTime            @default(now())
+  createdAt    DateTime             @default(now())
 
   @@index([plantId, severity])
   @@index([dispatchedAt])
 }
 
 model PushSubscription {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  endpoint  String   @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String    @unique
   p256dh    String
   auth      String
   userAgent String?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   revokedAt DateTime?
 
   @@index([userId, revokedAt])

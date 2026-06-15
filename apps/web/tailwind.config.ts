@@ -34,8 +34,8 @@ const config: Config = {
         sm: 'calc(var(--radius) - 4px)',
       },
       fontFamily: {
-        sans: ['IBM Plex Sans', 'Inter', 'system-ui', 'sans-serif'],
-        mono: ['IBM Plex Mono', 'JetBrains Mono', 'monospace'],
+        sans: ['var(--font-plex-sans)', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-plex-mono)', 'JetBrains Mono', 'monospace'],
       },
     },
   },

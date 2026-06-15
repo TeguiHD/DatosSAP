@@ -23,20 +23,23 @@ export interface NavItem {
   roles?: Role[];
 }
 
+export interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
 export const primaryNav: NavItem[] = [
-  { href: '/', label: 'Inicio', icon: Home },
+  { href: '/inicio', label: 'Inicio', icon: Home },
   { href: '/plantas', label: 'Plantas', icon: Factory },
   { href: '/planificacion', label: 'Planificacion', icon: CalendarDays },
   { href: '/ordenes', label: 'Ordenes', icon: ClipboardCheck },
 ];
 
-export const desktopPrimaryNav: NavItem[] = [
-  ...primaryNav,
-  { href: '/activos', label: 'Activos', icon: Network },
-  { href: '/importacion', label: 'Importacion', icon: FileUp, roles: ['SUPERADMIN', 'ADMIN'] },
-];
-
-export const secondaryNav: { label: string; items: NavItem[] }[] = [
+export const navSections: NavSection[] = [
+  {
+    label: 'Operacion',
+    items: primaryNav,
+  },
   {
     label: 'Gestion tecnica',
     items: [
@@ -62,3 +65,5 @@ export const secondaryNav: { label: string; items: NavItem[] }[] = [
     ],
   },
 ];
+
+export const secondaryNav = navSections.slice(1);
