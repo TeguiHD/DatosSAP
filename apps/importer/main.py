@@ -27,6 +27,36 @@ def detect_file(path: Path) -> str:
     raise ValueError(f"Unsupported Excel structure: {path.name}")
 
 
+def preview_rows(path: Path, limit: int = 10) -> dict[str, Any]:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    detected = detect_file(path)
+    if detected == "KKS_FIORI":
+        sheet_name = next(name for name in workbook.sheetnames if "kks essc" in name.lower())
+    elif detected == "POSICIONES_ESSC_SUR":
+        sheet_name = "Actividades MP ESSC Sur"
+    elif detected == "PLANES_MANTENCION":
+        sheet_name = "Planes" if "Planes" in workbook.sheetnames else workbook.sheetnames[0]
+    else:
+        sheet_name = workbook.sheetnames[0]
+
+    sheet = workbook[sheet_name]
+    rows: list[list[Any]] = []
+    for row in sheet.iter_rows(values_only=True):
+        values = [cell.isoformat() if hasattr(cell, "isoformat") else cell for cell in row[:12]]
+        if any(value not in (None, "") for value in values):
+            rows.append(values)
+        if len(rows) >= limit:
+            break
+
+    headers = [str(value) if value not in (None, "") else f"Columna {index + 1}" for index, value in enumerate(rows[0] if rows else [])]
+    return {
+        "fileType": detected,
+        "sheet": sheet_name,
+        "headers": headers,
+        "rows": rows[1:] if rows else [],
+    }
+
+
 def parse_kks(path: Path) -> KksDryRun:
     return parse_kks_file(path).dry_run()
 
@@ -92,6 +122,9 @@ def main() -> None:
     export = sub.add_parser("export")
     export.add_argument("--file", required=True)
     export.add_argument("--type", choices=["KKS_FIORI", "POSICIONES_ESSC_SUR", "PLANES_MANTENCION"])
+    preview = sub.add_parser("preview")
+    preview.add_argument("--file", required=True)
+    preview.add_argument("--limit", type=int, default=10)
     args = parser.parse_args()
 
     path = Path(args.file).expanduser().resolve()
@@ -101,6 +134,8 @@ def main() -> None:
         print(to_json(dry_run(path, args.type)))
     if args.command == "export":
         print(json.dumps(export_rows(path, args.type), ensure_ascii=False, indent=2, default=str))
+    if args.command == "preview":
+        print(json.dumps(preview_rows(path, args.limit), ensure_ascii=False, indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -66,7 +66,7 @@ export function LoginForm() {
           </div>
 
           {error ? (
-            <Alert className="border-red-200 bg-red-50 text-red-950">
+            <Alert variant="danger">
               <AlertCircle aria-hidden="true" />
               <AlertTitle>No pudimos iniciar sesion</AlertTitle>
               <AlertDescription>{error}</AlertDescription>
@@ -74,8 +74,8 @@ export function LoginForm() {
           ) : null}
 
           <Button type="submit" disabled={loading}>
-            {loading ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
-            {loading ? 'Verificando...' : 'Entrar'}
+            {loading ? <Loader2 data-icon="inline-start" aria-hidden="true" className="animate-spin" /> : null}
+            {loading ? 'Verificando…' : 'Entrar'}
           </Button>
         </form>
       </CardContent>

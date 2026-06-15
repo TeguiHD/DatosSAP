@@ -14,10 +14,10 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: `pnpm exec next dev --hostname 127.0.0.1 --port ${port}`,
+    command: `pnpm exec next build >/tmp/datos-web-e2e-build.log && pnpm exec next start --hostname 127.0.0.1 --port ${port}`,
     url: baseURL,
     reuseExistingServer: false,
-    timeout: 120_000,
+    timeout: 180_000,
   },
   projects: [
     {

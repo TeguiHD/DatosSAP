@@ -1,4 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleDestroy,
+} from '@nestjs/common';
+import { CreateBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Queue } from 'bullmq';
 import {
   AssetNodeType,
   FrequencyCode,
@@ -9,17 +18,31 @@ import {
   WorkOrderStatus,
 } from '@prisma/client';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { extname, isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { PrismaService } from '../prisma/prisma.service';
+import { createRedisConnection, IMPORT_QUEUE_NAME, type ImportQueuePayload } from './import.queue';
 
 const execFileAsync = promisify(execFile);
+const IMPORT_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_ACTIVE_IMPORTS = 3;
+
+export interface UploadedImportFile {
+  originalname: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+}
 
 interface CreateImportJobInput {
-  originalName: string;
-  fileType: ImportFileType;
+  originalName?: string;
+  fileType?: ImportFileType;
   storageKey?: string;
+  file?: UploadedImportFile;
+  uploadedById?: string;
 }
 
 interface ImporterIssue {
@@ -41,6 +64,13 @@ interface DryRunPayload {
   errors: number;
   issues: ImporterIssue[];
   metadata: Record<string, unknown>;
+}
+
+interface PreviewPayload {
+  fileType: ImportFileType;
+  sheet: string;
+  headers: string[];
+  rows: unknown[][];
 }
 
 interface KksExportRow {
@@ -141,17 +171,79 @@ interface PlanesExportPayload {
 type ExportPayload = KksExportPayload | PosicionesExportPayload | PlanesExportPayload;
 
 @Injectable()
-export class ImportsService {
+export class ImportsService implements OnModuleDestroy {
+  private readonly logger = new Logger(ImportsService.name);
+  private queue?: Queue;
+  private s3?: S3Client;
+
   constructor(private readonly prisma: PrismaService) {}
 
+  async onModuleDestroy() {
+    await this.queue?.close();
+  }
+
   async create(input: CreateImportJobInput) {
-    return this.prisma.importJob.create({
+    if (!input.file && !input.storageKey) {
+      throw new BadRequestException('Debes subir un archivo Excel para crear la importacion');
+    }
+
+    const originalName = input.file?.originalname ?? input.originalName ?? input.storageKey ?? 'import.xlsx';
+    const fileType = input.fileType ?? this.detectFileType(originalName);
+    const job = await this.prisma.importJob.create({
       data: {
-        originalName: input.originalName,
-        fileType: input.fileType,
+        originalName,
+        fileType,
+        ...(input.uploadedById ? { uploadedBy: { connect: { id: input.uploadedById } } } : {}),
         ...(input.storageKey ? { storageKey: input.storageKey } : {}),
       },
     });
+
+    if (input.file) {
+      const stored = await this.persistUploadedFile(job.id, input.file);
+      await this.prisma.$transaction([
+        this.prisma.importFile.create({
+          data: {
+            importJobId: job.id,
+            fileName: stored.objectKey,
+            checksum: stored.checksum,
+          },
+        }),
+        this.prisma.importJob.update({
+          where: { id: job.id },
+          data: { storageKey: stored.localPath },
+        }),
+      ]);
+      await this.audit('CREATE', 'ImportJob', job.id, input.uploadedById, { fileType, originalName });
+      return this.get(job.id);
+    }
+
+    await this.audit('CREATE', 'ImportJob', job.id, input.uploadedById, { fileType, originalName });
+    return job;
+  }
+
+  async list({ page, pageSize }: { page: number; pageSize: number }) {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.min(50, Math.max(1, pageSize));
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.importJob.count(),
+      this.prisma.importJob.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safePageSize,
+        take: safePageSize,
+        include: {
+          uploadedBy: { select: { id: true, email: true, name: true } },
+          issues: { take: 5, orderBy: { createdAt: 'desc' } },
+          _count: { select: { issues: true, rows: true } },
+        },
+      }),
+    ]);
+    return {
+      rows,
+      total,
+      page: safePage,
+      pageSize: safePageSize,
+      pages: Math.ceil(total / safePageSize),
+    };
   }
 
   async get(id: string) {
@@ -165,7 +257,106 @@ export class ImportsService {
     return job;
   }
 
-  async markDryRun(id: string) {
+  async listIssues(id: string, filters: { severity?: IssueSeverity; resolved?: boolean }) {
+    await this.assertJob(id);
+    return this.prisma.importIssue.findMany({
+      where: {
+        importJobId: id,
+        ...(filters.severity ? { severity: filters.severity } : {}),
+        ...(filters.resolved === undefined
+          ? {}
+          : { resolvedAt: filters.resolved ? { not: null } : null }),
+      },
+      orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async preview(id: string) {
+    const job = await this.assertJob(id);
+    const file = job.storageKey ?? job.originalName;
+    return this.runImporter<PreviewPayload>('preview', file, job.fileType);
+  }
+
+  async enqueue(id: string, action: 'dry-run' | 'apply', actorUserId?: string) {
+    const job = await this.assertJob(id);
+    const active = await this.prisma.importJob.count({
+      where: {
+        status: { in: [ImportJobStatus.APPLYING, ImportJobStatus.MAPPED] },
+        id: { not: id },
+      },
+    });
+    if (active >= MAX_ACTIVE_IMPORTS) {
+      throw new ConflictException('Ya hay 3 importaciones activas. Espera a que termine una antes de continuar.');
+    }
+
+    if (action === 'apply') {
+      const blocker = await this.prisma.importIssue.findFirst({
+        where: { importJobId: id, severity: IssueSeverity.CRITICAL, resolvedAt: null },
+      });
+      if (blocker) {
+        throw new ConflictException('Resuelve los conflictos críticos antes de aplicar la importación.');
+      }
+    }
+
+    const status = action === 'dry-run' ? ImportJobStatus.MAPPED : ImportJobStatus.APPLYING;
+    await this.prisma.importJob.update({ where: { id }, data: { status } });
+    await this.audit(action === 'dry-run' ? 'DRY_RUN_REQUESTED' : 'APPLY_REQUESTED', 'ImportJob', id, actorUserId, {
+      fileType: job.fileType,
+    });
+    const payload: ImportQueuePayload = {
+      jobId: id,
+      action,
+      ...(actorUserId ? { actorUserId } : {}),
+    };
+    await this.getQueue().add('import', payload, {
+      jobId: `${id}:${action}:${Date.now()}`,
+      removeOnComplete: 50,
+      removeOnFail: 100,
+      attempts: 1,
+    });
+    return this.get(id);
+  }
+
+  async progress(id: string) {
+    const job = await this.prisma.importJob.findUnique({
+      where: { id },
+      include: {
+        issues: { where: { resolvedAt: null } },
+        _count: { select: { rows: true, issues: true } },
+      },
+    });
+    if (!job) {
+      throw new NotFoundException('Import job not found');
+    }
+    const dryRun = this.normalizeDryRun(job.dryRun);
+    const openCritical = job.issues.filter((issue) => issue.severity === IssueSeverity.CRITICAL).length;
+    return {
+      id: job.id,
+      status: job.status,
+      phase: this.statusToPhase(job.status),
+      progress: this.statusToProgress(job.status),
+      fileType: job.fileType,
+      originalName: job.originalName,
+      created: dryRun.created,
+      updated: dryRun.updated,
+      skipped: dryRun.skipped,
+      errors: dryRun.errors,
+      openCritical,
+      issues: job._count.issues,
+      rows: job._count.rows,
+      terminal: this.isTerminalStatus(job.status),
+      updatedAt: job.updatedAt,
+    };
+  }
+
+  isTerminalProgress(data: unknown) {
+    if (!data || typeof data !== 'object' || !('status' in data)) {
+      return false;
+    }
+    return this.isTerminalStatus((data as { status: ImportJobStatus }).status);
+  }
+
+  async markDryRun(id: string, actorUserId?: string) {
     const job = await this.prisma.importJob.findUnique({ where: { id } });
     if (!job) {
       throw new NotFoundException('Import job not found');
@@ -184,7 +375,7 @@ export class ImportsService {
     };
     const hasCritical = dryRun.issues.some((issue) => issue.severity === IssueSeverity.CRITICAL);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.importIssue.deleteMany({ where: { importJobId: id, resolvedAt: null } });
       if (dryRun.issues.length) {
         await tx.importIssue.createMany({
@@ -209,6 +400,14 @@ export class ImportsService {
         include: { issues: true },
       });
     });
+    await this.audit('DRY_RUN_COMPLETED', 'ImportJob', id, actorUserId, {
+      status: result.status,
+      created: dryRun.created,
+      updated: dryRun.updated,
+      skipped: dryRun.skipped,
+      errors: dryRun.errors,
+    });
+    return result;
   }
 
   private async enrichDryRun(fileType: ImportFileType, file: string, dryRun: DryRunPayload): Promise<DryRunPayload> {
@@ -251,14 +450,14 @@ export class ImportsService {
     };
   }
 
-  async resolveIssue(id: string, issueId: string, resolution: unknown) {
+  async resolveIssue(id: string, issueId: string, resolution: unknown, actorUserId?: string) {
     const issue = await this.prisma.importIssue.findFirst({ where: { id: issueId, importJobId: id } });
     if (!issue) {
       throw new NotFoundException('Import issue not found');
     }
     const parsed = this.parseResolution(resolution);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       let targetPlantId = parsed.targetPlantId;
       if (!targetPlantId && parsed.targetPlantCode) {
         const plant = await tx.plant.findUnique({ where: { code: parsed.targetPlantCode } });
@@ -290,21 +489,44 @@ export class ImportsService {
           reason: parsed.reason ?? issue.message,
         },
       });
-      return tx.importIssue.update({
+      const updated = await tx.importIssue.update({
         where: { id: issueId },
         data: { resolvedAt: new Date(), resolution: this.asJson(parsed) },
       });
+      const openCritical = await tx.importIssue.count({
+        where: { importJobId: id, severity: IssueSeverity.CRITICAL, resolvedAt: null },
+      });
+      if (openCritical === 0) {
+        await tx.importJob.update({ where: { id }, data: { status: ImportJobStatus.DRY_RUN_READY } });
+      }
+      return updated;
+    });
+    await this.audit('ISSUE_RESOLVED', 'ImportJob', id, actorUserId, { issueId, resolution: parsed });
+    return result;
+  }
+
+  async markFailed(id: string, error: unknown) {
+    const message = this.sanitizeError(error);
+    await this.prisma.importJob.update({
+      where: { id },
+      data: {
+        status: ImportJobStatus.FAILED,
+        dryRun: this.asJson({
+          ...this.normalizeDryRun((await this.prisma.importJob.findUnique({ where: { id } }))?.dryRun),
+          lastError: message,
+        }),
+      },
     });
   }
 
-  async apply(id: string) {
+  async apply(id: string, actorUserId?: string) {
     const job = await this.prisma.importJob.findUnique({ where: { id }, include: { issues: true } });
     if (!job) {
       throw new NotFoundException('Import job not found');
     }
     const blocker = job.issues.find((issue) => issue.severity === IssueSeverity.CRITICAL && !issue.resolvedAt);
     if (blocker) {
-      throw new BadRequestException(`Critical import issue must be resolved first: ${blocker.code}`);
+      throw new ConflictException('Resuelve los conflictos críticos antes de aplicar la importación.');
     }
 
     await this.prisma.importJob.update({ where: { id }, data: { status: ImportJobStatus.APPLYING } });
@@ -320,28 +542,150 @@ export class ImportsService {
       await this.applyPlanes(id, exported.workOrders);
     }
 
-    return this.prisma.importJob.update({
+    const result = await this.prisma.importJob.update({
       where: { id },
       data: { status: ImportJobStatus.APPLIED },
       include: { issues: true, rows: { take: 20, orderBy: { rowNumber: 'asc' } } },
     });
+    await this.audit('APPLIED', 'ImportJob', id, actorUserId, { fileType: job.fileType });
+    return result;
   }
 
-  private async runImporter<T>(command: 'dry-run' | 'export', file: string, fileType: ImportFileType): Promise<T> {
-    const repoRoot = process.env.DATOS_REPO_ROOT ?? resolve(process.cwd(), '../..');
+  private async assertJob(id: string) {
+    const job = await this.prisma.importJob.findUnique({ where: { id } });
+    if (!job) {
+      throw new NotFoundException('Import job not found');
+    }
+    return job;
+  }
+
+  private getQueue() {
+    if (!this.queue) {
+      this.queue = new Queue(IMPORT_QUEUE_NAME, {
+        connection: createRedisConnection(),
+        defaultJobOptions: {
+          removeOnComplete: 50,
+          removeOnFail: 100,
+          attempts: 1,
+        },
+      });
+    }
+    return this.queue;
+  }
+
+  private detectFileType(name: string): ImportFileType {
+    const normalized = name.toLowerCase();
+    if (normalized.includes('posiciones')) {
+      return ImportFileType.POSICIONES_ESSC_SUR;
+    }
+    if (normalized.includes('plan')) {
+      return ImportFileType.PLANES_MANTENCION;
+    }
+    if (normalized.includes('kks') || normalized.includes('fiori') || normalized.includes('arbol')) {
+      return ImportFileType.KKS_FIORI;
+    }
+    throw new BadRequestException('No se pudo detectar el tipo de Excel por el nombre del archivo');
+  }
+
+  private async persistUploadedFile(jobId: string, file: UploadedImportFile) {
+    const extension = extname(file.originalname).toLowerCase();
+    if (!['.xlsx', '.xlsm'].includes(extension)) {
+      throw new BadRequestException('Solo se aceptan archivos Excel .xlsx o .xlsm');
+    }
+    const repoRoot = this.repoRoot();
+    const safeName = this.safeFileName(file.originalname);
+    const relativePath = `storage/imports/${jobId}/${safeName}`;
+    const localPath = resolve(repoRoot, relativePath);
+    await mkdir(resolve(localPath, '..'), { recursive: true });
+    await writeFile(localPath, file.buffer);
+    const checksum = createHash('sha256').update(file.buffer).digest('hex');
+    const objectKey = `imports/${jobId}/${safeName}`;
+    await this.uploadToObjectStorage(objectKey, file);
+    return { localPath: relativePath, objectKey, checksum };
+  }
+
+  private async uploadToObjectStorage(key: string, file: UploadedImportFile) {
+    const bucket = process.env.S3_BUCKET;
+    if (!bucket || !process.env.S3_ENDPOINT || !process.env.S3_ACCESS_KEY || !process.env.S3_SECRET_KEY) {
+      this.logger.warn('S3/MinIO no configurado; archivo disponible solo en staging local.');
+      return;
+    }
+    this.s3 ??= new S3Client({
+      endpoint: process.env.S3_ENDPOINT,
+      region: process.env.S3_REGION ?? 'us-east-1',
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY,
+        secretAccessKey: process.env.S3_SECRET_KEY,
+      },
+    });
+    const put = new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    try {
+      await this.s3.send(put);
+    } catch (error) {
+      if (this.sanitizeError(error).toLowerCase().includes('bucket')) {
+        await this.s3.send(new CreateBucketCommand({ Bucket: bucket }));
+        await this.s3.send(put);
+        return;
+      }
+      this.logger.warn(`No se pudo guardar en MinIO; se mantiene staging local. ${this.sanitizeError(error)}`);
+    }
+  }
+
+  private repoRoot() {
+    return process.env.DATOS_REPO_ROOT ?? resolve(process.cwd(), '../..');
+  }
+
+  private safeFileName(name: string) {
+    const extension = extname(name).toLowerCase();
+    const base = name
+      .slice(0, name.length - extension.length)
+      .normalize('NFKD')
+      .replace(/[^\w.-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase()
+      .slice(0, 120);
+    return `${base || 'import'}${extension}`;
+  }
+
+  private async runImporter<T>(
+    command: 'dry-run' | 'export' | 'preview',
+    file: string,
+    fileType: ImportFileType,
+  ): Promise<T> {
+    const repoRoot = this.repoRoot();
     const importer = resolve(repoRoot, 'apps/importer/main.py');
     const input = isAbsolute(file) ? file : resolve(repoRoot, file);
     if (!existsSync(input)) {
-      throw new BadRequestException(`Import file not found: ${input}`);
+      throw new BadRequestException('No se encontró el archivo de importación en almacenamiento privado');
     }
-    const { stdout, stderr } = await execFileAsync('python3', [importer, command, '--file', input, '--type', fileType], {
-      cwd: repoRoot,
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (stderr.trim()) {
-      // openpyxl can emit harmless warnings; keep them out of the API payload.
+    try {
+      const args = command === 'preview'
+        ? [importer, command, '--file', input, '--limit', '10']
+        : [importer, command, '--file', input, '--type', fileType];
+      const { stdout, stderr } = await execFileAsync('python3', args, {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          DATABASE_URL: process.env.DATABASE_URL,
+          TZ: process.env.TZ ?? 'America/Santiago',
+        },
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: IMPORT_TIMEOUT_MS,
+      });
+      if (stderr.trim()) {
+        // openpyxl can emit harmless warnings; keep them out of the API payload.
+      }
+      return JSON.parse(stdout) as T;
+    } catch (error) {
+      throw new BadRequestException(this.sanitizeError(error));
     }
-    return JSON.parse(stdout) as T;
   }
 
   private async applyKks(importJobId: string, rows: KksExportRow[]) {
@@ -864,6 +1208,75 @@ export class ImportsService {
       notes?: string;
       reason?: string;
     };
+  }
+
+  private normalizeDryRun(value: unknown) {
+    if (!value || typeof value !== 'object') {
+      return { created: 0, updated: 0, skipped: 0, errors: 0, metadata: {}, issues: [] };
+    }
+    const source = value as Partial<DryRunPayload> & { lastError?: string };
+    return {
+      created: Number(source.created ?? 0),
+      updated: Number(source.updated ?? 0),
+      skipped: Number(source.skipped ?? 0),
+      errors: Number(source.errors ?? 0),
+      metadata: source.metadata ?? {},
+      issues: source.issues ?? [],
+      ...(source.lastError ? { lastError: source.lastError } : {}),
+    };
+  }
+
+  private statusToProgress(status: ImportJobStatus) {
+    if (status === ImportJobStatus.UPLOADED) return 12;
+    if (status === ImportJobStatus.MAPPED) return 42;
+    if (status === ImportJobStatus.APPLYING) return 68;
+    return 100;
+  }
+
+  private statusToPhase(status: ImportJobStatus) {
+    if (status === ImportJobStatus.UPLOADED) return 'Archivo recibido';
+    if (status === ImportJobStatus.MAPPED) return 'Analizando archivo';
+    if (status === ImportJobStatus.DRY_RUN_READY) return 'Analisis listo';
+    if (status === ImportJobStatus.BLOCKED) return 'Conflictos por resolver';
+    if (status === ImportJobStatus.APPLYING) return 'Aplicando cambios';
+    if (status === ImportJobStatus.APPLIED) return 'Importacion aplicada';
+    if (status === ImportJobStatus.FAILED) return 'Importacion fallida';
+    return 'Importacion';
+  }
+
+  private isTerminalStatus(status: ImportJobStatus) {
+    const terminalStatuses: ImportJobStatus[] = [
+      ImportJobStatus.DRY_RUN_READY,
+      ImportJobStatus.BLOCKED,
+      ImportJobStatus.APPLIED,
+      ImportJobStatus.FAILED,
+    ];
+    return terminalStatuses.includes(status);
+  }
+
+  private sanitizeError(error: unknown) {
+    if (error instanceof Error) {
+      return error.message.replace(/[a-f0-9]{24,}/gi, '[hash]').slice(0, 400);
+    }
+    return 'No se pudo completar la importacion';
+  }
+
+  private async audit(
+    action: string,
+    resource: string,
+    resourceId: string,
+    actorUserId: string | undefined,
+    after: Record<string, unknown>,
+  ) {
+    await this.prisma.auditEvent.create({
+      data: {
+        resource,
+        resourceId,
+        action,
+        after: this.asJson(after),
+        ...(actorUserId ? { actorUser: { connect: { id: actorUserId } } } : {}),
+      },
+    });
   }
 
   private asJson(value: unknown): Prisma.InputJsonValue {
