@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { WorkOrderStatus } from '@prisma/client';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { RequestWithUser } from '../access/plant-access.service';
 import { WorkOrdersService } from './work-orders.service';
 
 interface CreateWorkOrderBody {
@@ -15,12 +15,8 @@ export class WorkOrdersController {
   constructor(private readonly workOrders: WorkOrdersService) {}
 
   @Get()
-  list(@Query('status') status?: WorkOrderStatus, @Query('plantId') plantId?: string, @Query('q') q?: string) {
-    return this.workOrders.list({
-      ...(status ? { status } : {}),
-      ...(plantId ? { plantId } : {}),
-      ...(q ? { q } : {}),
-    });
+  list(@Query() query: Record<string, string | undefined>, @Req() request: RequestWithUser) {
+    return this.workOrders.list(query, request.user);
   }
 
   @Post()
@@ -28,9 +24,24 @@ export class WorkOrdersController {
     return this.workOrders.create(body);
   }
 
+  @Get(':id')
+  detail(@Param('id') id: string, @Req() request: RequestWithUser) {
+    return this.workOrders.detail(id, request.user);
+  }
+
   @Get(':id/audit-timeline')
-  timeline(@Param('id') id: string) {
-    return this.workOrders.timeline(id);
+  timeline(@Param('id') id: string, @Req() request: RequestWithUser) {
+    return this.workOrders.timeline(id, request.user);
+  }
+
+  @Get(':id/milestones')
+  milestones(@Param('id') id: string, @Req() request: RequestWithUser) {
+    return this.workOrders.milestones(id, request.user);
+  }
+
+  @Get(':id/comments')
+  comments(@Param('id') id: string, @Query() query: Record<string, string | undefined>, @Req() request: RequestWithUser) {
+    return this.workOrders.comments(id, query, request.user);
   }
 
   @Post(':id/assign')

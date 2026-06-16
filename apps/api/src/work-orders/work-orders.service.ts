@@ -1,12 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { IssueSeverity, MilestoneStatus, Prisma, WorkOrderStatus } from '@prisma/client';
+import { IssueSeverity, MilestoneStatus, Prisma, Role, WorkOrderStatus } from '@prisma/client';
+import { AuthenticatedRequestUser, PlantAccessService } from '../access/plant-access.service';
+import { normalizePagination, paginated } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
-
-interface WorkOrderListQuery {
-  status?: WorkOrderStatus;
-  plantId?: string;
-  q?: string;
-}
 
 interface CreateWorkOrderInput {
   plantId: string;
@@ -66,40 +62,95 @@ const transitionRules: Record<WorkOrderStatus, WorkOrderStatus[]> = {
   SKIPPED: [WorkOrderStatus.REOPENED],
   CANCELLED: [WorkOrderStatus.REOPENED],
 };
+const COMMENT_READER_ROLES: Role[] = [Role.SUPERADMIN, Role.ADMIN, Role.SUPERVISOR];
+const TERMINAL_WORK_ORDER_STATUSES: WorkOrderStatus[] = [
+  WorkOrderStatus.COMPLETED,
+  WorkOrderStatus.CLOSED,
+  WorkOrderStatus.SIGNED,
+  WorkOrderStatus.CANCELLED,
+  WorkOrderStatus.SKIPPED,
+];
 
 @Injectable()
 export class WorkOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: PlantAccessService,
+  ) {}
 
-  async list(query: WorkOrderListQuery) {
-    const where: Prisma.WorkOrderWhereInput = {};
-    if (query.status) {
-      where.status = query.status;
-    }
-    if (query.plantId) {
-      where.plantId = query.plantId;
-    }
-    if (query.q?.trim()) {
-      const search = query.q.trim();
-      where.OR = [
-        { code: { contains: search, mode: 'insensitive' } },
-        { title: { contains: search, mode: 'insensitive' } },
-        { plant: { name: { contains: search, mode: 'insensitive' } } },
-      ];
-    }
-    return this.prisma.workOrder.findMany({
-      where,
+  async list(query: Record<string, string | undefined>, maybeUser?: AuthenticatedRequestUser) {
+    const user = this.access.requireUser(maybeUser);
+    const { page, limit, skip } = normalizePagination(query);
+    const where = await this.buildListWhere(query, user);
+    if (where === null) return paginated([], 0, page, limit);
+
+    const readLimit = skip + limit;
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.workOrder.count({ where }),
+      this.prisma.workOrder.findMany({
+        where,
+        select: this.listSelect(),
+        orderBy: [{ plannedStart: 'asc' }, { createdAt: 'desc' }],
+        take: readLimit,
+      }),
+    ]);
+    const now = new Date();
+    const sorted = rows
+      .map((row) => this.toListItem(row, now))
+      .sort((left, right) => Number(right.isOverdue) - Number(left.isOverdue) || (left.plannedStart?.getTime() ?? 0) - (right.plannedStart?.getTime() ?? 0));
+    return paginated(sorted.slice(skip, skip + limit), total, page, limit);
+  }
+
+  async detail(id: string, maybeUser?: AuthenticatedRequestUser) {
+    const user = this.access.requireUser(maybeUser);
+    const workOrder = await this.prisma.workOrder.findUnique({
+      where: { id },
       include: {
         plant: { include: { client: true } },
         assetNode: true,
-        assignments: { where: { status: 'ACTIVE' }, include: { personnel: true, user: true } },
-        evidenceFiles: true,
-        hhEntries: true,
         milestones: { orderBy: { createdAt: 'asc' } },
+        assignments: { include: { user: { select: { id: true, email: true, name: true } }, personnel: true } },
+        visitPlan: true,
+        _count: { select: { evidenceFiles: true, comments: true, hhEntries: true } },
       },
-      orderBy: [{ plannedStart: 'asc' }, { createdAt: 'desc' }],
-      take: 200,
     });
+    if (!workOrder) throw new NotFoundException('Work order not found');
+    await this.ensureWorkOrderAccess(workOrder, user);
+    return {
+      ...workOrder,
+      asset: this.toAssetRef(workOrder.assetNode),
+      isOverdue: Boolean(workOrder.plannedEnd && workOrder.plannedEnd < new Date() && !this.isTerminal(workOrder.status)),
+      counts: workOrder._count,
+    };
+  }
+
+  async milestones(id: string, maybeUser?: AuthenticatedRequestUser) {
+    await this.detail(id, maybeUser);
+    return this.prisma.workOrderMilestone.findMany({
+      where: { workOrderId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async comments(id: string, query: Record<string, string | undefined>, maybeUser?: AuthenticatedRequestUser) {
+    const user = this.access.requireUser(maybeUser);
+    await this.detail(id, user);
+    const { page, limit, skip } = normalizePagination(query);
+    const where: Prisma.WorkOrderCommentWhereInput = {
+      workOrderId: id,
+      ...(this.canReadInternalComments(user) ? {} : { internal: false }),
+    };
+    const [total, data] = await this.prisma.$transaction([
+      this.prisma.workOrderComment.count({ where }),
+      this.prisma.workOrderComment.findMany({
+        where,
+        include: { authorUser: { select: { id: true, email: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+    return paginated(data, total, page, limit);
   }
 
   async create(input: CreateWorkOrderInput) {
@@ -276,12 +327,180 @@ export class WorkOrdersService {
     });
   }
 
-  async timeline(id: string) {
+  async timeline(id: string, maybeUser?: AuthenticatedRequestUser) {
+    await this.detail(id, maybeUser);
     return this.prisma.auditEvent.findMany({
       where: { resource: 'work_order', resourceId: id },
       orderBy: { createdAt: 'asc' },
       take: 100,
     });
+  }
+
+  private async buildListWhere(query: Record<string, string | undefined>, user: AuthenticatedRequestUser) {
+    const plantIds = await this.access.plantIdFilter(user, query.plantId);
+    if (plantIds?.length === 0) return null;
+
+    const where: Prisma.WorkOrderWhereInput = {};
+    const and: Prisma.WorkOrderWhereInput[] = [];
+    if (plantIds) where.plantId = { in: plantIds };
+    if (query.status && this.isWorkOrderStatus(query.status)) where.status = query.status;
+    if (query.criticality && this.isIssueSeverity(query.criticality)) where.criticality = query.criticality;
+    if (query.from || query.to) {
+      where.plannedStart = this.dateRange(query.from, query.to);
+    }
+    if (query.responsibleId) {
+      and.push({
+        OR: [
+          { assignedUserId: query.responsibleId },
+          { assignments: { some: { userId: query.responsibleId, status: 'ACTIVE' } } },
+          { assignments: { some: { personnelId: query.responsibleId, status: 'ACTIVE' } } },
+        ],
+      });
+    }
+    if (query.search?.trim()) {
+      const search = query.search.trim();
+      and.push({
+        OR: [
+          { code: { contains: search, mode: 'insensitive' } },
+          { title: { contains: search, mode: 'insensitive' } },
+          { plant: { name: { contains: search, mode: 'insensitive' } } },
+          { assetNode: { equipmentCode: { contains: search, mode: 'insensitive' } } },
+          { assetNode: { kksDescription: { contains: search, mode: 'insensitive' } } },
+        ],
+      });
+    }
+    if (user.role === Role.TECNICO) {
+      and.push({
+        OR: [
+          { assignedUserId: user.userId },
+          { assignments: { some: { userId: user.userId, status: 'ACTIVE' } } },
+        ],
+      });
+    }
+    if (and.length) where.AND = and;
+    return where;
+  }
+
+  private listSelect() {
+    return {
+      id: true,
+      code: true,
+      title: true,
+      status: true,
+      criticality: true,
+      plannedStart: true,
+      plannedEnd: true,
+      plannedHours: true,
+      actualHours: true,
+      progress: true,
+      visitPlanId: true,
+      plant: { select: { id: true, code: true, name: true, client: { select: { name: true } } } },
+      assetNode: { select: { id: true, technicalObject: true, kks: true, kksDescription: true, equipmentCode: true, equipmentDescription: true } },
+      assignments: {
+        where: { status: 'ACTIVE' },
+        select: {
+          id: true,
+          userId: true,
+          personnelId: true,
+          user: { select: { id: true, email: true, name: true } },
+          personnel: { select: { id: true, name: true, isExternal: true } },
+        },
+      },
+      milestones: { select: { id: true, status: true, weight: true } },
+      _count: { select: { milestones: true, evidenceFiles: true, comments: true } },
+    } satisfies Prisma.WorkOrderSelect;
+  }
+
+  private toListItem(row: {
+    id: string;
+    code: string;
+    title: string;
+    status: WorkOrderStatus;
+    criticality: IssueSeverity;
+    plannedStart: Date | null;
+    plannedEnd: Date | null;
+    plannedHours: number | null;
+    actualHours: number | null;
+    progress: number;
+    visitPlanId: string | null;
+    plant: { id: string; code: string; name: string; client: { name: string } };
+    assetNode: { id: string; technicalObject: string; kks: string | null; kksDescription: string | null; equipmentCode: string | null; equipmentDescription: string | null } | null;
+    assignments: unknown[];
+    milestones: { status: MilestoneStatus; weight: number }[];
+    _count: { milestones: number; evidenceFiles: number; comments: number };
+  }, now: Date) {
+    const completedWeight = row.milestones
+      .filter((milestone) => milestone.status === MilestoneStatus.COMPLETED)
+      .reduce((sum, milestone) => sum + milestone.weight, 0);
+    const totalWeight = row.milestones.reduce((sum, milestone) => sum + milestone.weight, 0);
+    return {
+      id: row.id,
+      code: row.code,
+      title: row.title,
+      status: row.status,
+      criticality: row.criticality,
+      plannedStart: row.plannedStart,
+      plannedEnd: row.plannedEnd,
+      plannedHours: row.plannedHours,
+      actualHours: row.actualHours,
+      progress: totalWeight > 0 ? Math.round((completedWeight / totalWeight) * 100) : Math.round(row.progress),
+      visitPlanId: row.visitPlanId,
+      plant: {
+        id: row.plant.id,
+        code: row.plant.code,
+        name: row.plant.name,
+        clientName: row.plant.client.name,
+      },
+      asset: this.toAssetRef(row.assetNode),
+      assignments: row.assignments,
+      counts: row._count,
+      isOverdue: Boolean(row.plannedEnd && row.plannedEnd < now && !this.isTerminal(row.status)),
+    };
+  }
+
+  private async ensureWorkOrderAccess(workOrder: { id: string; plantId: string; assignedUserId?: string | null }, user: AuthenticatedRequestUser) {
+    await this.access.ensurePlantAccess(workOrder.plantId, user);
+    if (user.role !== Role.TECNICO) return;
+    if (workOrder.assignedUserId === user.userId) return;
+    const assignment = await this.prisma.assignment.findFirst({
+      where: { workOrderId: workOrder.id, userId: user.userId, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (!assignment) throw new NotFoundException('Work order not found');
+  }
+
+  private canReadInternalComments(user: AuthenticatedRequestUser) {
+    return COMMENT_READER_ROLES.includes(user.role);
+  }
+
+  private dateRange(from?: string, to?: string) {
+    const range: Prisma.DateTimeFilter = {};
+    if (from) range.gte = new Date(from);
+    if (to) range.lte = new Date(to);
+    return range;
+  }
+
+  private toAssetRef(asset: { id: string; technicalObject: string; kks: string | null; kksDescription: string | null; equipmentCode: string | null; equipmentDescription: string | null } | null) {
+    if (!asset) return null;
+    return {
+      id: asset.id,
+      kksCode: asset.kks ?? asset.technicalObject,
+      kksDescription: asset.kksDescription,
+      equipmentNumber: asset.equipmentCode,
+      equipmentDescription: asset.equipmentDescription,
+    };
+  }
+
+  private isWorkOrderStatus(value: string): value is WorkOrderStatus {
+    return Object.values(WorkOrderStatus).includes(value as WorkOrderStatus);
+  }
+
+  private isIssueSeverity(value: string): value is IssueSeverity {
+    return Object.values(IssueSeverity).includes(value as IssueSeverity);
+  }
+
+  private isTerminal(status: WorkOrderStatus) {
+    return TERMINAL_WORK_ORDER_STATUSES.includes(status);
   }
 
   private async mustFind(id: string) {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { AccessModule } from './access/access.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
@@ -27,6 +28,7 @@ import { WorkOrdersModule } from './work-orders/work-orders.module';
       },
     ]),
     PrismaModule,
+    AccessModule,
     AuthModule,
     HealthModule,
     DashboardModule,

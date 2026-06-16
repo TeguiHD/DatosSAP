@@ -1,34 +1,28 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Req } from '@nestjs/common';
+import { RequestWithUser } from '../access/plant-access.service';
 import { PlanningService } from './planning.service';
 
 @Controller('planning')
 export class PlanningController {
   constructor(private readonly planning: PlanningService) {}
 
+  @Get()
+  operational(@Query() query: Record<string, string | undefined>, @Req() request: RequestWithUser) {
+    return this.planning.operational(query, request.user);
+  }
+
   @Get('month')
-  month(@Query('year') year?: string, @Query('month') month?: string, @Query('plantId') plantId?: string) {
-    return this.planning.month({
-      year: Number(year ?? new Date().getFullYear()),
-      month: Number(month ?? new Date().getMonth() + 1),
-      ...(plantId ? { plantId } : {}),
-    });
+  month(@Query() query: Record<string, string | undefined>, @Req() request: RequestWithUser) {
+    return this.planning.month(query, request.user);
   }
 
   @Get('list')
-  list(@Query('from') from?: string, @Query('to') to?: string, @Query('plantId') plantId?: string) {
-    return this.planning.list({
-      ...(from ? { from } : {}),
-      ...(to ? { to } : {}),
-      ...(plantId ? { plantId } : {}),
-    });
+  list(@Query() query: Record<string, string | undefined>, @Req() request: RequestWithUser) {
+    return this.planning.legacyList(query, request.user);
   }
 
   @Get('gantt')
-  gantt(@Query('from') from?: string, @Query('to') to?: string, @Query('groupBy') groupBy?: string) {
-    return this.planning.gantt({
-      ...(from ? { from } : {}),
-      ...(to ? { to } : {}),
-      ...(groupBy ? { groupBy } : {}),
-    });
+  gantt(@Query() query: Record<string, string | undefined>, @Req() request: RequestWithUser) {
+    return this.planning.legacyGantt(query, request.user);
   }
 }

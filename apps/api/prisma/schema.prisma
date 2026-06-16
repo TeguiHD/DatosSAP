@@ -790,6 +790,7 @@ model KpiDailySummary {
   plannedHours           Float    @default(0)
   actualHours            Float    @default(0)
   healthScore            Int?
+  refreshedAt            DateTime @default(now())
   createdAt              DateTime @default(now())
 
   @@unique([plantId, day])
